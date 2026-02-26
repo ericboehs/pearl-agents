@@ -1,0 +1,14 @@
+# Secrets
+*.env
+!examples/*.example
+
+# Runtime state
+state/
+
+# OS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
