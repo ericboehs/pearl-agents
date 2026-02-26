@@ -1,0 +1,59 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build base image
+        run: docker build -t pearl-base:latest agents/base/
+
+      - name: Build code agent image
+        run: docker build -t pearl-code:latest agents/code/
+
+      - name: Verify claude CLI
+        run: docker run --rm pearl-code:latest claude --version
+
+      - name: Verify Ruby
+        run: docker run --rm pearl-code:latest ruby --version
+
+      - name: Verify Python
+        run: docker run --rm pearl-code:latest python3 --version
+
+      - name: Verify Go
+        run: docker run --rm pearl-code:latest go version
+
+      - name: Verify entrypoint with skills mount
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/agents/code/skills:/skills:ro" \
+            pearl-code:latest \
+            bash -c '
+              if [[ -L /workspace/CLAUDE.md ]]; then
+                target=$(readlink /workspace/CLAUDE.md)
+                if [[ "$target" == "/skills/CLAUDE.md" ]]; then
+                  echo "Skills symlink OK: /workspace/CLAUDE.md -> $target"
+                else
+                  echo "FAIL: Symlink points to $target instead of /skills/CLAUDE.md"
+                  exit 1
+                fi
+              else
+                echo "FAIL: /workspace/CLAUDE.md is not a symlink"
+                ls -la /workspace/CLAUDE.md 2>&1 || echo "(file does not exist)"
+                exit 1
+              fi
+            '
+
+      - name: Clean up Docker images
+        if: always()
+        run: |
+          docker rmi pearl-code:latest pearl-base:latest || true
+          docker image prune -f || true

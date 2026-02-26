@@ -1,0 +1,400 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# PEARL agent setup wizard
+# Creates ~/.config/pearl/agents/<agent>.env interactively
+
+AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
+PEARL_ROOT="${PEARL_ROOT:-$HOME/.config/pearl}"
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+prompt() {
+  local label="$1" default="${2:-}"
+  if [[ -n "$default" ]]; then
+    printf "  %s [%s]: " "$label" "$default" >&2
+  else
+    printf "  %s: " "$label" >&2
+  fi
+  read -r REPLY
+  [[ -z "$REPLY" ]] && REPLY="$default"
+}
+
+prompt_secret() {
+  local label="$1" default="${2:-}"
+  if [[ -n "$default" ]]; then
+    local masked
+    masked=$(mask_token "$default")
+    printf "  %s [%s]: " "$label" "$masked" >&2
+  else
+    printf "  %s: " "$label" >&2
+  fi
+  read -rs REPLY
+  echo >&2
+  [[ -z "$REPLY" ]] && REPLY="$default"
+}
+
+confirm() {
+  local label="$1" default="${2:-Y}"
+  if [[ "$default" == "Y" ]]; then
+    printf "  %s [Y/n]: " "$label" >&2
+  else
+    printf "  %s [y/N]: " "$label" >&2
+  fi
+  read -r REPLY
+  [[ -z "$REPLY" ]] && REPLY="$default"
+  [[ "$REPLY" =~ ^[Yy] ]]
+}
+
+mask_token() {
+  local token="$1"
+  if [[ ${#token} -ge 12 ]]; then
+    echo "${token:0:6}...${token: -6}"
+  else
+    echo "...${token: -4}"
+  fi
+}
+
+heading() {
+  echo ""
+  echo "  $1"
+  printf '  %*s\n' "${#1}" '' | tr ' ' '─'
+}
+
+show_pat_instructions() {
+  echo "    → https://github.com/settings/personal-access-tokens/new"
+  echo ""
+  echo "    Recommended scopes:"
+  echo "      • Contents: Read and write (clone, push)"
+  echo "      • Pull requests: Read and write (open PRs)"
+  echo "      • Metadata: Read-only (always required)"
+}
+
+# ── List agents ──────────────────────────────────────────────────────
+
+# Check Docker connectivity upfront
+check_docker() {
+  if ! docker info &>/dev/null; then
+    echo "Error: Cannot connect to Docker daemon." >&2
+    echo "  Ensure Docker is running:" >&2
+    echo "    macOS: open -a Docker" >&2
+    echo "    Linux: sudo systemctl start docker" >&2
+    exit 1
+  fi
+}
+
+list_agents() {
+  echo ""
+  echo "Available agents:"
+  echo ""
+  for dockerfile in "$AGENTS_REPO"/agents/*/Dockerfile; do
+    [[ -f "$dockerfile" ]] || continue
+    local name
+    name=$(basename "$(dirname "$dockerfile")")
+    [[ "$name" == "base" ]] && continue
+
+    local env_status image_status
+    if [[ -f "$PEARL_ROOT/agents/$name.env" ]]; then
+      env_status="✓ configured"
+    else
+      env_status="✗ not configured"
+    fi
+    if docker image inspect "pearl-$name:latest" &>/dev/null; then
+      image_status="image ✓"
+    else
+      image_status="image ✗"
+    fi
+    printf "  %-12s %s    %s\n" "$name" "$env_status" "$image_status"
+  done
+  echo ""
+  echo "Run 'pearl setup <agent>' to configure an agent."
+}
+
+# ── Main ─────────────────────────────────────────────────────────────
+
+if [[ $# -eq 0 ]]; then
+  check_docker
+  list_agents
+  exit 0
+fi
+
+AGENT="$1"
+AGENT_DIR="$AGENTS_REPO/agents/$AGENT"
+AGENT_ENV="$PEARL_ROOT/agents/$AGENT.env"
+AGENT_STATE="$PEARL_ROOT/state/$AGENT"
+IMAGE="pearl-$AGENT:latest"
+
+# Validate agent exists
+if [[ ! -f "$AGENT_DIR/Dockerfile" ]]; then
+  echo "Unknown agent: $AGENT"
+  list_agents
+  exit 1
+fi
+
+check_docker
+
+# Check for existing config
+if [[ -f "$AGENT_ENV" ]]; then
+  echo ""
+  echo "  Agent '$AGENT' is already configured: $AGENT_ENV"
+  if ! confirm "Overwrite?" "N"; then
+    exit 0
+  fi
+fi
+
+echo ""
+echo "══════════════════════════════════════════"
+echo "  PEARL Setup — $AGENT agent"
+echo "══════════════════════════════════════════"
+
+# ── Step 1: Auth ─────────────────────────────────────────────────────
+
+heading "Step 1/4: Authentication"
+echo ""
+echo "  How should this agent authenticate with Claude?"
+echo ""
+echo "    1) Keychain (macOS) — uses your existing 'claude login' credentials"
+echo "    2) Copilot proxy    — routes through a local proxy (e.g., clapilot)"
+echo "    3) API key          — direct Anthropic API key"
+echo ""
+prompt "Auth method" "1"
+AUTH_CHOICE="$REPLY"
+
+AUTH_METHOD=""
+PROXY_URL=""
+PROXY_MODEL=""
+PROXY_SONNET=""
+PROXY_HAIKU=""
+API_KEY=""
+
+case "$AUTH_CHOICE" in
+  1|"")
+    AUTH_METHOD="keychain"
+    if security find-generic-password -s "Claude Code-credentials" -a "$USER" -w &>/dev/null; then
+      echo "  ✓ Found Claude credentials in macOS Keychain"
+    else
+      echo ""
+      echo "  ⚠ No Claude credentials found in Keychain."
+      echo "    Run 'claude login' on your host first."
+      if ! confirm "Continue anyway?" "N"; then
+        exit 1
+      fi
+    fi
+    ;;
+  2)
+    AUTH_METHOD="proxy"
+    echo ""
+    prompt "Proxy URL" "http://host.docker.internal:4141"
+    PROXY_URL="$REPLY"
+    prompt "Model" "claude-opus-4.6"
+    PROXY_MODEL="$REPLY"
+    prompt "Sonnet model" "claude-sonnet-4.5"
+    PROXY_SONNET="$REPLY"
+    prompt "Haiku model" "claude-haiku-4.5"
+    PROXY_HAIKU="$REPLY"
+    ;;
+  3)
+    AUTH_METHOD="apikey"
+    echo ""
+    prompt_secret "Anthropic API key"
+    API_KEY="$REPLY"
+    if [[ -z "$API_KEY" ]]; then
+      echo "  ✗ API key is required."
+      exit 1
+    fi
+    ;;
+  *)
+    echo "  Invalid choice: $AUTH_CHOICE"
+    exit 1
+    ;;
+esac
+
+# ── Step 2: Git Identity ────────────────────────────────────────────
+
+heading "Step 2/4: Git Identity"
+echo ""
+echo "  Commits made by this agent will use this identity."
+echo ""
+
+DEFAULT_NAME=$(git config user.name 2>/dev/null || echo "")
+DEFAULT_EMAIL=$(git config user.email 2>/dev/null || echo "")
+
+prompt "Name" "$DEFAULT_NAME"
+GIT_NAME="$REPLY"
+if [[ -z "$GIT_NAME" ]]; then
+  echo "  Error: Git name is required for agent commits."
+  exit 1
+fi
+
+prompt "Email" "$DEFAULT_EMAIL"
+GIT_EMAIL="$REPLY"
+if [[ -z "$GIT_EMAIL" ]]; then
+  echo "  Error: Git email is required for agent commits."
+  exit 1
+fi
+
+# ── Step 3: GitHub Token ────────────────────────────────────────────
+
+heading "Step 3/4: GitHub Token"
+echo ""
+echo "  A GitHub PAT lets the agent clone repos and open PRs."
+echo ""
+
+DETECTED_TOKEN=""
+if command -v gh &>/dev/null; then
+  DETECTED_TOKEN=$(gh auth token 2>/dev/null || true)
+fi
+[[ -z "$DETECTED_TOKEN" ]] && DETECTED_TOKEN="${GITHUB_TOKEN:-}"
+
+GITHUB_PAT=""
+
+if [[ -n "$DETECTED_TOKEN" ]]; then
+  echo "  ✓ Found existing token ($(mask_token "$DETECTED_TOKEN"))"
+  echo ""
+  echo "  ⚠ This agent runs with --dangerously-skip-permissions, meaning it"
+  echo "    can execute any command without asking. We strongly recommend"
+  echo "    creating a dedicated fine-grained PAT scoped to only the repos"
+  echo "    and permissions this agent needs:"
+  echo ""
+  show_pat_instructions
+  echo ""
+  if confirm "Use detected token?" "N"; then
+    GITHUB_PAT="$DETECTED_TOKEN"
+  fi
+fi
+
+if [[ -z "$GITHUB_PAT" ]]; then
+  if [[ -z "$DETECTED_TOKEN" ]]; then
+    echo "  Create a fine-grained PAT at:"
+    show_pat_instructions
+    echo ""
+  fi
+  prompt_secret "GitHub PAT (Enter to skip)"
+  GITHUB_PAT="$REPLY"
+fi
+
+# ── Step 4: Docker Image ────────────────────────────────────────────
+
+heading "Step 4/4: Docker Image"
+echo ""
+
+# ── Summary ──────────────────────────────────────────────────────────
+
+echo ""
+echo "══════════════════════════════════════════"
+echo "  Configuration Summary"
+echo "══════════════════════════════════════════"
+echo ""
+
+AUTH_DISPLAY=""
+case "$AUTH_METHOD" in
+  keychain) AUTH_DISPLAY="Keychain (macOS)" ;;
+  proxy)    AUTH_DISPLAY="Copilot proxy ($PROXY_URL)" ;;
+  apikey)   AUTH_DISPLAY="API key" ;;
+esac
+
+printf "  %-14s %s\n" "Agent:" "$AGENT"
+printf "  %-14s %s\n" "Auth:" "$AUTH_DISPLAY"
+printf "  %-14s %s\n" "Git name:" "$GIT_NAME"
+printf "  %-14s %s\n" "Git email:" "$GIT_EMAIL"
+if [[ -n "$GITHUB_PAT" ]]; then
+  printf "  %-14s %s\n" "GitHub PAT:" "$(mask_token "$GITHUB_PAT")"
+else
+  printf "  %-14s %s\n" "GitHub PAT:" "(skipped)"
+fi
+printf "  %-14s %s\n" "Env file:" "$AGENT_ENV"
+printf "  %-14s %s\n" "State dir:" "$AGENT_STATE/"
+echo ""
+
+if ! confirm "Save this configuration?" "Y"; then
+  echo "  Aborted."
+  exit 0
+fi
+
+# ── Write env file (before building so config is preserved on build failure) ─
+
+mkdir -p "$(dirname "$AGENT_ENV")" "$AGENT_STATE"
+
+{
+  case "$AUTH_METHOD" in
+    keychain)
+      echo "# Keychain auth — credentials extracted from macOS Keychain at launch"
+      echo "KEYCHAIN_AUTH=true"
+      ;;
+    proxy)
+      echo "# Copilot proxy auth — routes through local proxy"
+      echo "ANTHROPIC_BASE_URL=$PROXY_URL"
+      echo "ANTHROPIC_AUTH_TOKEN=dummy"
+      echo "ANTHROPIC_MODEL=$PROXY_MODEL"
+      echo "ANTHROPIC_DEFAULT_SONNET_MODEL=$PROXY_SONNET"
+      echo "ANTHROPIC_SMALL_FAST_MODEL=$PROXY_HAIKU"
+      echo "ANTHROPIC_DEFAULT_HAIKU_MODEL=$PROXY_HAIKU"
+      echo "DISABLE_NON_ESSENTIAL_MODEL_CALLS=1"
+      echo "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
+      ;;
+    apikey)
+      echo "# Direct API key auth"
+      echo "ANTHROPIC_API_KEY=$API_KEY"
+      ;;
+  esac
+
+  echo ""
+  echo "# Git identity for commits"
+  echo "GIT_AUTHOR_NAME=$GIT_NAME"
+  echo "GIT_AUTHOR_EMAIL=$GIT_EMAIL"
+  echo "GIT_COMMITTER_NAME=$GIT_NAME"
+  echo "GIT_COMMITTER_EMAIL=$GIT_EMAIL"
+
+  if [[ -n "$GITHUB_PAT" ]]; then
+    echo ""
+    echo "# GitHub PAT for cloning/pushing"
+    echo "GITHUB_TOKEN=$GITHUB_PAT"
+  fi
+} > "$AGENT_ENV"
+
+chmod 600 "$AGENT_ENV"
+
+echo ""
+echo "  ✓ Created $AGENT_ENV"
+echo "  ✓ Created $AGENT_STATE/"
+
+# ── Build Docker image ──────────────────────────────────────────────
+
+if docker image inspect "$IMAGE" &>/dev/null; then
+  echo "  ✓ Image $IMAGE found"
+else
+  echo ""
+  echo "  ⚠ Image $IMAGE not found."
+  if confirm "Build it now?" "Y"; then
+    echo ""
+    BASE_IMAGE="pearl-base:latest"
+    if ! docker image inspect "$BASE_IMAGE" &>/dev/null; then
+      echo "  Building $BASE_IMAGE..."
+      if ! docker build -t "$BASE_IMAGE" "$AGENTS_REPO/agents/base/" >&2; then
+        echo "  ✗ Base image build failed. Your configuration has been saved."
+        echo "  Fix the build issue and run:"
+        echo "    docker build -t $BASE_IMAGE $AGENTS_REPO/agents/base/"
+        echo "    docker build -t $IMAGE $AGENT_DIR/"
+        exit 1
+      fi
+    fi
+    echo "  Building $IMAGE..."
+    if ! docker build -t "$IMAGE" "$AGENT_DIR/" >&2; then
+      echo "  ✗ Agent image build failed. Your configuration has been saved."
+      echo "  Fix the build issue and run:"
+      echo "    docker build -t $IMAGE $AGENT_DIR/"
+      exit 1
+    fi
+    echo "  ✓ Images built successfully"
+  else
+    echo ""
+    echo "  Note: Agent image not built. You must build it before running:"
+    echo "    docker build -t pearl-base:latest $AGENTS_REPO/agents/base/"
+    echo "    docker build -t $IMAGE $AGENT_DIR/"
+  fi
+fi
+
+echo ""
+echo "  You're ready to go! Try:"
+echo "    pearl $AGENT \"What tools do you have?\""
+echo ""

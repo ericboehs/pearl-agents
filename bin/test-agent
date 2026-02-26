@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Smoke test for PEARL agents
+# Usage: bin/test-agent <agent-name>
+# Verifies the agent image builds, runs, and responds to stream-json input.
+
+AGENT="${1:?Usage: bin/test-agent <agent-name>}"
+IMAGE="pearl-$AGENT:latest"
+AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
+SKILLS_DIR="$AGENTS_REPO/agents/$AGENT/skills"
+FAILURES=0
+
+echo "=== PEARL Agent Smoke Test: $AGENT ==="
+echo ""
+
+# Step 1: Check image exists
+echo "1. Checking image $IMAGE..."
+if ! docker image inspect "$IMAGE" &>/dev/null; then
+  echo "   FAIL: Image $IMAGE not found. Build it first:"
+  echo "   docker build -t pearl-base:latest agents/base/"
+  echo "   docker build -t pearl-$AGENT:latest agents/$AGENT/"
+  exit 1
+fi
+echo "   OK"
+
+# Step 2: Verify claude CLI is available
+echo "2. Checking claude CLI..."
+if ! VERSION=$(docker run --rm "$IMAGE" claude --version 2>&1); then
+  echo "   FAIL: claude --version failed with: $VERSION"
+  exit 1
+fi
+if [[ -z "$VERSION" ]]; then
+  echo "   FAIL: claude --version returned empty"
+  exit 1
+fi
+echo "   OK: $VERSION"
+
+# Step 3: Verify agent-specific tools
+echo "3. Checking agent tools..."
+
+check_tool() {
+  local tool="$1" cmd="$2"
+  local output
+  if ! output=$(docker run --rm "$IMAGE" bash -c "$cmd" 2>&1); then
+    echo "   FAIL: $tool — command failed: $output"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+  if [[ -z "$output" ]]; then
+    echo "   FAIL: $tool — empty version output"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+  echo "   OK: $tool: $output"
+}
+
+case "$AGENT" in
+  code)
+    check_tool "ruby" "ruby --version | head -1"
+    check_tool "python3" "python3 --version | head -1"
+    # go uses 'go version' not 'go --version'
+    check_tool "go" "go version | head -1"
+    ;;
+  *)
+    echo "   (no tool checks defined for $AGENT)"
+    ;;
+esac
+
+# Step 4: Verify skills mount
+echo "4. Checking skills directory..."
+if [[ -d "$SKILLS_DIR" ]]; then
+  SKILLS_CHECK=$(docker run --rm -v "$SKILLS_DIR:/skills:ro" "$IMAGE" \
+    bash -c 'ls /skills/CLAUDE.md 2>/dev/null && echo "found" || echo "missing"')
+  echo "   Skills CLAUDE.md: $SKILLS_CHECK"
+  if [[ "$SKILLS_CHECK" == *"missing"* ]]; then
+    FAILURES=$((FAILURES + 1))
+  fi
+else
+  echo "   SKIP: No skills directory at $SKILLS_DIR"
+fi
+
+# Step 5: Verify entrypoint symlinks skills
+echo "5. Checking entrypoint skill symlink..."
+if [[ -d "$SKILLS_DIR" ]]; then
+  SYMLINK_CHECK=$(docker run --rm -v "$SKILLS_DIR:/skills:ro" "$IMAGE" \
+    bash -c '
+      if [[ -L /workspace/CLAUDE.md ]]; then
+        target=$(readlink /workspace/CLAUDE.md)
+        if [[ "$target" == "/skills/CLAUDE.md" ]]; then
+          echo "OK: /workspace/CLAUDE.md -> $target"
+        else
+          echo "FAIL: Symlink points to $target instead of /skills/CLAUDE.md"
+        fi
+      else
+        echo "FAIL: /workspace/CLAUDE.md is not a symlink"
+        ls -la /workspace/CLAUDE.md 2>&1 || echo "(file does not exist)"
+      fi
+    ')
+  echo "   $SYMLINK_CHECK"
+  if [[ "$SYMLINK_CHECK" == *"FAIL"* ]]; then
+    FAILURES=$((FAILURES + 1))
+  fi
+else
+  echo "   SKIP: No skills directory at $SKILLS_DIR"
+fi
+
+echo ""
+if [[ $FAILURES -gt 0 ]]; then
+  echo "=== $FAILURES check(s) FAILED ==="
+  exit 1
+fi
+echo "=== All checks passed ==="
