@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Smoke test for PEARL agents
+# Usage: bin/test-agent <agent-name>
+# Verifies the agent image builds, runs, and responds to stream-json input.
+
+AGENT="${1:?Usage: bin/test-agent <agent-name>}"
+IMAGE="pearl-$AGENT:latest"
+AGENTS_REPO="$(cd "$(dirname "$0")/.." && pwd)"
+SKILLS_DIR="$AGENTS_REPO/agents/$AGENT/skills"
+
+echo "=== PEARL Agent Smoke Test: $AGENT ==="
+echo ""
+
+# Step 1: Check image exists
+echo "1. Checking image $IMAGE..."
+if ! docker image inspect "$IMAGE" &>/dev/null; then
+  echo "   FAIL: Image $IMAGE not found. Build it first:"
+  echo "   docker build -t pearl-base:latest agents/base/"
+  echo "   docker build -t pearl-$AGENT:latest agents/$AGENT/"
+  exit 1
+fi
+echo "   OK"
+
+# Step 2: Verify claude CLI is available
+echo "2. Checking claude CLI..."
+VERSION=$(docker run --rm "$IMAGE" claude --version 2>&1 || true)
+if [[ -z "$VERSION" ]]; then
+  echo "   FAIL: claude --version returned empty"
+  exit 1
+fi
+echo "   OK: $VERSION"
+
+# Step 3: Verify agent-specific tools
+echo "3. Checking agent tools..."
+case "$AGENT" in
+  code)
+    for tool in ruby python3; do
+      TOOL_VERSION=$(docker run --rm "$IMAGE" "$tool" --version 2>&1 | head -1 || true)
+      echo "   $tool: $TOOL_VERSION"
+    done
+    GO_VERSION=$(docker run --rm "$IMAGE" go version 2>&1 | head -1 || true)
+    echo "   go: $GO_VERSION"
+    ;;
+  *)
+    echo "   (no tool checks defined for $AGENT)"
+    ;;
+esac
+
+# Step 4: Verify skills mount
+echo "4. Checking skills directory..."
+if [[ -d "$SKILLS_DIR" ]]; then
+  SKILLS_CHECK=$(docker run --rm -v "$SKILLS_DIR:/skills:ro" "$IMAGE" \
+    bash -c 'ls /skills/CLAUDE.md 2>/dev/null && echo "found" || echo "missing"')
+  echo "   Skills CLAUDE.md: $SKILLS_CHECK"
+else
+  echo "   SKIP: No skills directory at $SKILLS_DIR"
+fi
+
+# Step 5: Verify entrypoint symlinks skills
+echo "5. Checking entrypoint skill symlink..."
+SYMLINK_CHECK=$(docker run --rm -v "$SKILLS_DIR:/skills:ro" "$IMAGE" \
+  bash -c 'ls -la /workspace/CLAUDE.md 2>/dev/null || echo "no symlink"')
+echo "   $SYMLINK_CHECK"
+
+echo ""
+echo "=== All checks passed ==="

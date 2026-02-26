@@ -1,3 +1,6 @@
+# Override global gitignore (skills CLAUDE.md should be tracked)
+!CLAUDE.md
+
 # Secrets
 *.env
 !examples/*.example

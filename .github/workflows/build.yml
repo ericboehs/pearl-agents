@@ -1,0 +1,39 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build base image
+        run: docker build -t pearl-base:latest agents/base/
+
+      - name: Build code agent image
+        run: docker build -t pearl-code:latest agents/code/
+
+      - name: Verify claude CLI
+        run: docker run --rm pearl-code:latest claude --version
+
+      - name: Verify Ruby
+        run: docker run --rm pearl-code:latest ruby --version
+
+      - name: Verify Python
+        run: docker run --rm pearl-code:latest python3 --version
+
+      - name: Verify Go
+        run: docker run --rm pearl-code:latest go version
+
+      - name: Verify entrypoint with skills mount
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/agents/code/skills:/skills:ro" \
+            pearl-code:latest \
+            bash -c 'test -L /workspace/CLAUDE.md && echo "Skills symlink OK"'

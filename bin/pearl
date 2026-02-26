@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: pearl <agent-name> [claude-args...]"
+  echo ""
+  echo "Run a PEARL agent in a Docker container."
+  echo ""
+  echo "Examples:"
+  echo "  pearl code \"Implement the FizzBuzz function\""
+  echo "  pearl code --resume abc123"
+  echo "  pearl code -p \"Fix the failing test\""
+  echo ""
+  echo "Environment:"
+  echo "  PEARL_ROOT          Config root (default: ~/.config/pearl)"
+  echo "  PEARL_AGENTS_REPO   Repo checkout path (default: auto-detected)"
+  exit 1
+}
+
+[[ $# -lt 1 ]] && usage
+
+AGENT="$1"
+shift
+
+PEARL_ROOT="${PEARL_ROOT:-$HOME/.config/pearl}"
+AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
+AGENT_ENV="$PEARL_ROOT/agents/$AGENT.env"
+AGENT_STATE="$PEARL_ROOT/state/$AGENT"
+SKILLS_DIR="$AGENTS_REPO/agents/$AGENT/skills"
+IMAGE="pearl-$AGENT:latest"
+
+# Validate env file exists
+if [[ ! -f "$AGENT_ENV" ]]; then
+  echo "Missing env file: $AGENT_ENV"
+  echo "Create it from an example: cp examples/env.*.example $AGENT_ENV"
+  exit 1
+fi
+
+# Persistent state dir for Claude settings
+mkdir -p "$AGENT_STATE"
+
+# Seed .claude.json from host if not yet initialized
+if [[ ! -f "$AGENT_STATE/.claude.json" && -f "$HOME/.claude.json" ]]; then
+  cp "$HOME/.claude.json" "$AGENT_STATE/.claude.json"
+  # Ensure installMethod is npm (container uses npm, not native)
+  if command -v python3 &>/dev/null; then
+    python3 -c "
+import json
+with open('$AGENT_STATE/.claude.json') as f: d = json.load(f)
+d['installMethod'] = 'npm'
+with open('$AGENT_STATE/.claude.json', 'w') as f: json.dump(d, f, indent=2)
+"
+  fi
+fi
+
+# Keychain auth: extract credentials from macOS Keychain
+if grep -q "KEYCHAIN_AUTH=true" "$AGENT_ENV" 2>/dev/null; then
+  CREDS=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || true)
+  if [[ -n "$CREDS" ]]; then
+    echo "$CREDS" > "$AGENT_STATE/.credentials.json"
+    chmod 600 "$AGENT_STATE/.credentials.json"
+  else
+    echo "Warning: No Claude credentials found in Keychain. Run 'claude login' first."
+  fi
+fi
+
+DOCKER_ARGS=(-it --rm --env-file "$AGENT_ENV")
+
+# Mount persistent Claude state
+DOCKER_ARGS+=(-v "$AGENT_STATE:/home/agent/.claude")
+[[ -f "$AGENT_STATE/.claude.json" ]] && \
+  DOCKER_ARGS+=(-v "$AGENT_STATE/.claude.json:/home/agent/.claude.json")
+
+# Mount skills (volume-mounted, not baked into image)
+[[ -d "$SKILLS_DIR" ]] && DOCKER_ARGS+=(-v "$SKILLS_DIR:/skills:ro")
+
+# Mount current directory as workspace
+DOCKER_ARGS+=(-v "$(pwd):/workspace" -w /workspace)
+
+# Copilot proxy needs host.docker.internal
+if grep -q "ANTHROPIC_BASE_URL" "$AGENT_ENV" 2>/dev/null; then
+  DOCKER_ARGS+=(--add-host=host.docker.internal:host-gateway)
+fi
+
+exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" \
+  claude --dangerously-skip-permissions "$@"
