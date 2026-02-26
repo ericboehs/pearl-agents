@@ -3,8 +3,13 @@ set -euo pipefail
 
 usage() {
   echo "Usage: pearl <agent-name> [claude-args...]"
+  echo "       pearl setup [agent-name]"
   echo ""
   echo "Run a PEARL agent in a Docker container."
+  echo ""
+  echo "Commands:"
+  echo "  setup             List agents and their config status"
+  echo "  setup <agent>     Configure an agent interactively"
   echo ""
   echo "Examples:"
   echo "  pearl code \"Implement the FizzBuzz function\""
@@ -19,6 +24,14 @@ usage() {
 
 [[ $# -lt 1 ]] && usage
 
+# Dispatch subcommands
+case "$1" in
+  setup)
+    shift
+    exec "$(dirname "$0")/pearl-setup" "$@"
+    ;;
+esac
+
 AGENT="$1"
 shift
 
@@ -29,11 +42,14 @@ AGENT_STATE="$PEARL_ROOT/state/$AGENT"
 SKILLS_DIR="$AGENTS_REPO/agents/$AGENT/skills"
 IMAGE="pearl-$AGENT:latest"
 
-# Validate env file exists
+# Run setup if env file doesn't exist
 if [[ ! -f "$AGENT_ENV" ]]; then
-  echo "Missing env file: $AGENT_ENV"
-  echo "Create it from an example: cp examples/env.*.example $AGENT_ENV"
-  exit 1
+  echo "Agent '$AGENT' is not configured yet. Starting setup..."
+  "$(dirname "$0")/pearl-setup" "$AGENT"
+  # Re-check after setup (user may have aborted)
+  if [[ ! -f "$AGENT_ENV" ]]; then
+    exit 1
+  fi
 fi
 
 # Persistent state dir for Claude settings

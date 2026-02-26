@@ -11,13 +11,18 @@ Each agent runs in an ephemeral Docker container with scoped credentials, volume
 docker build -t pearl-base:latest agents/base/
 docker build -t pearl-code:latest agents/code/
 
-# 2. Configure credentials
-mkdir -p ~/.config/pearl/agents ~/.config/pearl/state
-cp examples/env.apikey.example ~/.config/pearl/agents/code.env
-# Edit code.env with your actual credentials
-
-# 3. Run
+# 2. Run — setup wizard runs automatically on first use
 bin/pearl code "What tools do you have? List your versions."
+```
+
+Or configure explicitly:
+
+```bash
+# Interactive setup wizard
+bin/pearl setup code
+
+# List available agents and their config status
+bin/pearl setup
 ```
 
 ## Architecture
@@ -33,6 +38,7 @@ pearl-agents/
 │       └── tools/        # Custom CLI scripts (baked into image)
 ├── bin/
 │   ├── pearl             # Wrapper script (handles auth, mounts, docker run)
+│   ├── pearl-setup       # Interactive setup wizard
 │   └── test-agent        # Smoke test for built images
 └── examples/
     ├── env.apikey.example
@@ -59,7 +65,7 @@ node:22-bookworm-slim
 
 ## Auth Models
 
-PEARL supports three authentication models, configured via the agent's env file:
+PEARL supports three authentication models, configured via `pearl setup <agent>` or manually via env files:
 
 ### Direct API Key
 Set `ANTHROPIC_API_KEY` in the env file. Simplest setup.
@@ -86,7 +92,7 @@ cp examples/env.proxy.example ~/.config/pearl/agents/code.env
 3. Create `agents/<name>/skills/CLAUDE.md` with agent identity and instructions
 4. Add `agents/<name>/skills/references/` for reference docs
 5. Build: `docker build -t pearl-<name>:latest agents/<name>/`
-6. Configure: `cp examples/env.*.example ~/.config/pearl/agents/<name>.env`
+6. Run: `pearl <name>` (setup wizard will run automatically)
 7. Test: `bin/test-agent <name>`
 
 ## Skills (Volume-Mounted)
