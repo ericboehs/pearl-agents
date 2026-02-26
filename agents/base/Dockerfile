@@ -16,10 +16,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 RUN useradd -m -s /bin/bash agent
 
-# Pre-configure Claude CLI to skip onboarding and use npm install method
+# Pre-configure Claude CLI to skip onboarding and suppress npm-to-native warning
 RUN mkdir -p /home/agent/.claude && \
     echo '{"hasCompletedOnboarding":true,"installMethod":"npm"}' > /home/agent/.claude.json && \
     chown -R agent:agent /home/agent/.claude /home/agent/.claude.json
+ENV DISABLE_INSTALLATION_CHECKS=1
 
 USER agent
 WORKDIR /workspace
