@@ -23,8 +23,9 @@ prompt() {
 prompt_secret() {
   local label="$1" default="${2:-}"
   if [[ -n "$default" ]]; then
-    local masked="${default: -4}"
-    printf "  %s [...%s]: " "$label" "$masked" >&2
+    local masked
+    masked=$(mask_token "$default")
+    printf "  %s [%s]: " "$label" "$masked" >&2
   else
     printf "  %s: " "$label" >&2
   fi
@@ -43,6 +44,15 @@ confirm() {
   read -r REPLY
   [[ -z "$REPLY" ]] && REPLY="$default"
   [[ "$REPLY" =~ ^[Yy] ]]
+}
+
+mask_token() {
+  local token="$1"
+  if [[ ${#token} -ge 12 ]]; then
+    echo "${token:0:6}...${token: -6}"
+  else
+    echo "...${token: -4}"
+  fi
 }
 
 heading() {
@@ -207,8 +217,7 @@ fi
 GITHUB_PAT=""
 
 if [[ -n "$DETECTED_TOKEN" ]]; then
-  local_masked="${DETECTED_TOKEN: -4}"
-  echo "  ✓ Found existing token (ending in ...$local_masked)"
+  echo "  ✓ Found existing token ($(mask_token "$DETECTED_TOKEN"))"
   echo ""
   echo "  ⚠ This agent runs with --dangerously-skip-permissions, meaning it"
   echo "    can execute any command without asking. We strongly recommend"
@@ -284,7 +293,7 @@ printf "  %-14s %s\n" "Auth:" "$AUTH_DISPLAY"
 printf "  %-14s %s\n" "Git name:" "$GIT_NAME"
 printf "  %-14s %s\n" "Git email:" "$GIT_EMAIL"
 if [[ -n "$GITHUB_PAT" ]]; then
-  printf "  %-14s ...%s\n" "GitHub PAT:" "${GITHUB_PAT: -4}"
+  printf "  %-14s %s\n" "GitHub PAT:" "$(mask_token "$GITHUB_PAT")"
 else
   printf "  %-14s %s\n" "GitHub PAT:" "(skipped)"
 fi
