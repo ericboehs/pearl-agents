@@ -15,3 +15,7 @@ state/
 *.swp
 *.swo
 *~
+
+# Ruby tooling
+.bundle/
+.ruby-lsp/

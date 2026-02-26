@@ -11,8 +11,7 @@ RUN git config --system credential.helper \
   && git config --system credential.https://github.com.username x-access-token \
   && git config --system safe.directory '*'
 
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 RUN useradd -m -s /bin/bash agent
 

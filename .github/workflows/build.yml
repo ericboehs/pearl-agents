@@ -36,4 +36,18 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/agents/code/skills:/skills:ro" \
             pearl-code:latest \
-            bash -c 'test -L /workspace/CLAUDE.md && echo "Skills symlink OK"'
+            bash -c '
+              if [[ -L /workspace/CLAUDE.md ]]; then
+                target=$(readlink /workspace/CLAUDE.md)
+                if [[ "$target" == "/skills/CLAUDE.md" ]]; then
+                  echo "Skills symlink OK: /workspace/CLAUDE.md -> $target"
+                else
+                  echo "FAIL: Symlink points to $target instead of /skills/CLAUDE.md"
+                  exit 1
+                fi
+              else
+                echo "FAIL: /workspace/CLAUDE.md is not a symlink"
+                ls -la /workspace/CLAUDE.md 2>&1 || echo "(file does not exist)"
+                exit 1
+              fi
+            '

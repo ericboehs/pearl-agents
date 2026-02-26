@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# PEARL agent runner — launches Claude Code agents in Docker containers
+
+BIN_DIR="$(dirname "$0")"
+
 usage() {
   echo "Usage: pearl <agent-name> [claude-args...]"
   echo "       pearl setup [agent-name]"
@@ -28,24 +32,44 @@ usage() {
 case "$1" in
   setup)
     shift
-    exec "$(dirname "$0")/pearl-setup" "$@"
+    exec "$BIN_DIR/pearl-setup" "$@"
     ;;
 esac
 
 AGENT="$1"
 shift
 
+# Validate agent name (alphanumeric, hyphens, underscores only)
+if [[ ! "$AGENT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "Error: Invalid agent name '$AGENT' (must be alphanumeric, hyphens, underscores)"
+  exit 1
+fi
+
 PEARL_ROOT="${PEARL_ROOT:-$HOME/.config/pearl}"
-AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
+AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$BIN_DIR/.." && pwd)}"
 AGENT_ENV="$PEARL_ROOT/agents/$AGENT.env"
 AGENT_STATE="$PEARL_ROOT/state/$AGENT"
 SKILLS_DIR="$AGENTS_REPO/agents/$AGENT/skills"
 IMAGE="pearl-$AGENT:latest"
 
+# Validate agent directory exists
+if [[ ! -d "$AGENTS_REPO/agents/$AGENT" ]]; then
+  echo "Error: Unknown agent '$AGENT'"
+  echo ""
+  echo "Available agents:"
+  for d in "$AGENTS_REPO"/agents/*/Dockerfile; do
+    [[ -f "$d" ]] || continue
+    name=$(basename "$(dirname "$d")")
+    [[ "$name" == "base" ]] && continue
+    echo "  $name"
+  done
+  exit 1
+fi
+
 # Run setup if env file doesn't exist
 if [[ ! -f "$AGENT_ENV" ]]; then
   echo "Agent '$AGENT' is not configured yet. Starting setup..."
-  "$(dirname "$0")/pearl-setup" "$AGENT"
+  "$BIN_DIR/pearl-setup" "$AGENT"
   # Re-check after setup (user may have aborted)
   if [[ ! -f "$AGENT_ENV" ]]; then
     exit 1
@@ -61,25 +85,29 @@ if [[ ! -f "$AGENT_STATE/.claude.json" && -f "$HOME/.claude.json" ]]; then
 fi
 
 # Ensure installMethod is npm (container uses npm, not native)
-if [[ -f "$AGENT_STATE/.claude.json" ]] && command -v python3 &>/dev/null; then
-  python3 -c "
-import json
-with open('$AGENT_STATE/.claude.json') as f: d = json.load(f)
-if d.get('installMethod') != 'npm':
-    d['installMethod'] = 'npm'
-    with open('$AGENT_STATE/.claude.json', 'w') as f: json.dump(d, f, indent=2)
-"
+if [[ -f "$AGENT_STATE/.claude.json" ]]; then
+  if command -v jq &>/dev/null; then
+    jq '.installMethod = "npm"' "$AGENT_STATE/.claude.json" > "$AGENT_STATE/.claude.json.tmp" && \
+      mv "$AGENT_STATE/.claude.json.tmp" "$AGENT_STATE/.claude.json" || {
+        echo "Warning: Could not update installMethod in .claude.json" >&2
+        rm -f "$AGENT_STATE/.claude.json.tmp"
+      }
+  else
+    echo "Warning: jq not found. Skipping installMethod fix for .claude.json." >&2
+    echo "  Install jq to suppress the Claude npm-to-native warning." >&2
+  fi
 fi
 
 # Keychain auth: extract credentials from macOS Keychain
 if grep -q "KEYCHAIN_AUTH=true" "$AGENT_ENV" 2>/dev/null; then
-  CREDS=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || true)
-  if [[ -n "$CREDS" ]]; then
-    echo "$CREDS" > "$AGENT_STATE/.credentials.json"
-    chmod 600 "$AGENT_STATE/.credentials.json"
-  else
-    echo "Warning: No Claude credentials found in Keychain. Run 'claude login' first."
-  fi
+  CREDS=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null) || {
+    echo "Error: No Claude credentials found in macOS Keychain."
+    echo "  Run 'claude login' on your host first, then try again."
+    echo "  If your keychain is locked, unlock it with: security unlock-keychain"
+    exit 1
+  }
+  echo "$CREDS" > "$AGENT_STATE/.credentials.json"
+  chmod 600 "$AGENT_STATE/.credentials.json"
 fi
 
 DOCKER_ARGS=(-it --rm --env-file "$AGENT_ENV")
@@ -98,6 +126,16 @@ DOCKER_ARGS+=(-v "$(pwd):/workspace" -w /workspace)
 # Copilot proxy needs host.docker.internal
 if grep -q "ANTHROPIC_BASE_URL" "$AGENT_ENV" 2>/dev/null; then
   DOCKER_ARGS+=(--add-host=host.docker.internal:host-gateway)
+fi
+
+# Verify image exists before launching
+if ! docker image inspect "$IMAGE" &>/dev/null; then
+  echo "Error: Docker image '$IMAGE' not found."
+  echo "  Build it with:"
+  echo "    docker build -t pearl-base:latest agents/base/"
+  echo "    docker build -t $IMAGE agents/$AGENT/"
+  echo "  Or run:  pearl setup $AGENT"
+  exit 1
 fi
 
 exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" \

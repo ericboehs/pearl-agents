@@ -61,7 +61,27 @@ heading() {
   printf '  %*s\n' "${#1}" '' | tr ' ' '─'
 }
 
+show_pat_instructions() {
+  echo "    → https://github.com/settings/personal-access-tokens/new"
+  echo ""
+  echo "    Recommended scopes:"
+  echo "      • Contents: Read and write (clone, push)"
+  echo "      • Pull requests: Read and write (open PRs)"
+  echo "      • Metadata: Read-only (always required)"
+}
+
 # ── List agents ──────────────────────────────────────────────────────
+
+# Check Docker connectivity upfront
+check_docker() {
+  if ! docker info &>/dev/null; then
+    echo "Error: Cannot connect to Docker daemon." >&2
+    echo "  Ensure Docker is running:" >&2
+    echo "    macOS: open -a Docker" >&2
+    echo "    Linux: sudo systemctl start docker" >&2
+    exit 1
+  fi
+}
 
 list_agents() {
   echo ""
@@ -93,6 +113,7 @@ list_agents() {
 # ── Main ─────────────────────────────────────────────────────────────
 
 if [[ $# -eq 0 ]]; then
+  check_docker
   list_agents
   exit 0
 fi
@@ -109,6 +130,8 @@ if [[ ! -f "$AGENT_DIR/Dockerfile" ]]; then
   list_agents
   exit 1
 fi
+
+check_docker
 
 # Check for existing config
 if [[ -f "$AGENT_ENV" ]]; then
@@ -198,8 +221,17 @@ DEFAULT_EMAIL=$(git config user.email 2>/dev/null || echo "")
 
 prompt "Name" "$DEFAULT_NAME"
 GIT_NAME="$REPLY"
+if [[ -z "$GIT_NAME" ]]; then
+  echo "  Error: Git name is required for agent commits."
+  exit 1
+fi
+
 prompt "Email" "$DEFAULT_EMAIL"
 GIT_EMAIL="$REPLY"
+if [[ -z "$GIT_EMAIL" ]]; then
+  echo "  Error: Git email is required for agent commits."
+  exit 1
+fi
 
 # ── Step 3: GitHub Token ────────────────────────────────────────────
 
@@ -224,12 +256,7 @@ if [[ -n "$DETECTED_TOKEN" ]]; then
   echo "    creating a dedicated fine-grained PAT scoped to only the repos"
   echo "    and permissions this agent needs:"
   echo ""
-  echo "    → https://github.com/settings/personal-access-tokens/new"
-  echo ""
-  echo "    Recommended scopes:"
-  echo "      • Contents: Read and write (clone, push)"
-  echo "      • Pull requests: Read and write (open PRs)"
-  echo "      • Metadata: Read-only (always required)"
+  show_pat_instructions
   echo ""
   if confirm "Use detected token?" "N"; then
     GITHUB_PAT="$DETECTED_TOKEN"
@@ -239,12 +266,7 @@ fi
 if [[ -z "$GITHUB_PAT" ]]; then
   if [[ -z "$DETECTED_TOKEN" ]]; then
     echo "  Create a fine-grained PAT at:"
-    echo "    → https://github.com/settings/personal-access-tokens/new"
-    echo ""
-    echo "    Recommended scopes:"
-    echo "      • Contents: Read and write"
-    echo "      • Pull requests: Read and write"
-    echo "      • Metadata: Read-only"
+    show_pat_instructions
     echo ""
   fi
   prompt_secret "GitHub PAT (Enter to skip)"
@@ -255,23 +277,6 @@ fi
 
 heading "Step 4/4: Docker Image"
 echo ""
-
-if docker image inspect "$IMAGE" &>/dev/null; then
-  echo "  ✓ Image $IMAGE found"
-else
-  echo "  ⚠ Image $IMAGE not found."
-  if confirm "Build it now?" "Y"; then
-    echo ""
-    BASE_IMAGE="pearl-base:latest"
-    if ! docker image inspect "$BASE_IMAGE" &>/dev/null; then
-      echo "  Building $BASE_IMAGE..."
-      docker build -t "$BASE_IMAGE" "$AGENTS_REPO/agents/base/" >&2
-    fi
-    echo "  Building $IMAGE..."
-    docker build -t "$IMAGE" "$AGENT_DIR/" >&2
-    echo "  ✓ Images built successfully"
-  fi
-fi
 
 # ── Summary ──────────────────────────────────────────────────────────
 
@@ -306,7 +311,7 @@ if ! confirm "Save this configuration?" "Y"; then
   exit 0
 fi
 
-# ── Write env file ───────────────────────────────────────────────────
+# ── Write env file (before building so config is preserved on build failure) ─
 
 mkdir -p "$(dirname "$AGENT_ENV")" "$AGENT_STATE"
 
@@ -352,6 +357,43 @@ chmod 600 "$AGENT_ENV"
 echo ""
 echo "  ✓ Created $AGENT_ENV"
 echo "  ✓ Created $AGENT_STATE/"
+
+# ── Build Docker image ──────────────────────────────────────────────
+
+if docker image inspect "$IMAGE" &>/dev/null; then
+  echo "  ✓ Image $IMAGE found"
+else
+  echo ""
+  echo "  ⚠ Image $IMAGE not found."
+  if confirm "Build it now?" "Y"; then
+    echo ""
+    BASE_IMAGE="pearl-base:latest"
+    if ! docker image inspect "$BASE_IMAGE" &>/dev/null; then
+      echo "  Building $BASE_IMAGE..."
+      if ! docker build -t "$BASE_IMAGE" "$AGENTS_REPO/agents/base/" >&2; then
+        echo "  ✗ Base image build failed. Your configuration has been saved."
+        echo "  Fix the build issue and run:"
+        echo "    docker build -t $BASE_IMAGE $AGENTS_REPO/agents/base/"
+        echo "    docker build -t $IMAGE $AGENT_DIR/"
+        exit 1
+      fi
+    fi
+    echo "  Building $IMAGE..."
+    if ! docker build -t "$IMAGE" "$AGENT_DIR/" >&2; then
+      echo "  ✗ Agent image build failed. Your configuration has been saved."
+      echo "  Fix the build issue and run:"
+      echo "    docker build -t $IMAGE $AGENT_DIR/"
+      exit 1
+    fi
+    echo "  ✓ Images built successfully"
+  else
+    echo ""
+    echo "  Note: Agent image not built. You must build it before running:"
+    echo "    docker build -t pearl-base:latest $AGENTS_REPO/agents/base/"
+    echo "    docker build -t $IMAGE $AGENT_DIR/"
+  fi
+fi
+
 echo ""
 echo "  You're ready to go! Try:"
 echo "    pearl $AGENT \"What tools do you have?\""
