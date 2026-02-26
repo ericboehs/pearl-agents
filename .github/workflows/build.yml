@@ -51,3 +51,9 @@ jobs:
                 exit 1
               fi
             '
+
+      - name: Clean up Docker images
+        if: always()
+        run: |
+          docker rmi pearl-code:latest pearl-base:latest || true
+          docker image prune -f || true

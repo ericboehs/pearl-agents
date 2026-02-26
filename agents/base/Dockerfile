@@ -6,10 +6,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g @anthropic-ai/claude-code
 
-RUN git config --system credential.helper \
-      '!f() { echo "password=$GITHUB_TOKEN"; }; f' \
+# Scope credential helper to github.com only (prevents PAT leaking to other remotes)
+RUN git config --system credential.https://github.com.helper \
+      '!f() { if [ -n "$GITHUB_TOKEN" ]; then echo "password=$GITHUB_TOKEN"; else echo "GITHUB_TOKEN is not set" >&2; exit 1; fi; }; f' \
   && git config --system credential.https://github.com.username x-access-token \
-  && git config --system safe.directory '*'
+  && git config --system safe.directory /workspace \
+  && git config --system safe.directory /home/agent
 
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
