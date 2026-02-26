@@ -58,15 +58,17 @@ mkdir -p "$AGENT_STATE"
 # Seed .claude.json from host if not yet initialized
 if [[ ! -f "$AGENT_STATE/.claude.json" && -f "$HOME/.claude.json" ]]; then
   cp "$HOME/.claude.json" "$AGENT_STATE/.claude.json"
-  # Ensure installMethod is npm (container uses npm, not native)
-  if command -v python3 &>/dev/null; then
-    python3 -c "
+fi
+
+# Ensure installMethod is npm (container uses npm, not native)
+if [[ -f "$AGENT_STATE/.claude.json" ]] && command -v python3 &>/dev/null; then
+  python3 -c "
 import json
 with open('$AGENT_STATE/.claude.json') as f: d = json.load(f)
-d['installMethod'] = 'npm'
-with open('$AGENT_STATE/.claude.json', 'w') as f: json.dump(d, f, indent=2)
+if d.get('installMethod') != 'npm':
+    d['installMethod'] = 'npm'
+    with open('$AGENT_STATE/.claude.json', 'w') as f: json.dump(d, f, indent=2)
 "
-  fi
 fi
 
 # Keychain auth: extract credentials from macOS Keychain
