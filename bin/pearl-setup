@@ -19,7 +19,7 @@ prompt() {
     printf "  %s: " "$label" >&2
   fi
   read -r REPLY
-  [[ -z "$REPLY" ]] && REPLY="$default"
+  [[ -z "$REPLY" ]] && REPLY="$default" || true
 }
 
 prompt_secret() {
@@ -33,7 +33,7 @@ prompt_secret() {
   fi
   read -rs REPLY
   echo >&2
-  [[ -z "$REPLY" ]] && REPLY="$default"
+  [[ -z "$REPLY" ]] && REPLY="$default" || true
 }
 
 confirm() {
@@ -44,7 +44,7 @@ confirm() {
     printf "  %s [y/N]: " "$label" >&2
   fi
   read -r REPLY
-  [[ -z "$REPLY" ]] && REPLY="$default"
+  [[ -z "$REPLY" ]] && REPLY="$default" || true
   [[ "$REPLY" =~ ^[Yy] ]]
 }
 

@@ -118,7 +118,7 @@ if [[ ! -f "$AGENT_ENV" ]]; then
   fi
 fi
 
-# Resolve auth profile: --auth flag > auth/active file > error
+# Resolve auth profile: --auth flag > auth/active file > agent env (backwards compat)
 AUTH_ENV=""
 if [[ -n "$AUTH_OVERRIDE" ]]; then
   AUTH_ENV="$AUTH_DIR/$AUTH_OVERRIDE.env"
@@ -136,6 +136,14 @@ elif [[ -f "$AUTH_DIR/active" ]]; then
       echo "  Run 'pearl auth' to fix your configuration." >&2
       exit 1
     fi
+  fi
+fi
+
+# Error if no auth profile resolved (unless agent env has auth vars for backwards compat)
+if [[ -z "$AUTH_ENV" ]]; then
+  if ! grep -qE "^(KEYCHAIN_AUTH|ANTHROPIC_BASE_URL|ANTHROPIC_API_KEY)=" "$AGENT_ENV" 2>/dev/null; then
+    echo "Error: No active auth profile. Run 'pearl auth add' to create one." >&2
+    exit 1
   fi
 fi
 
@@ -157,7 +165,7 @@ if [[ ! -f "$AGENT_STATE/.claude.json" && -f "$HOME/.claude.json" ]]; then
   cp "$HOME/.claude.json" "$AGENT_STATE/.claude.json"
 fi
 
-# Sync select settings from host (theme, statusLine, syntax highlighting)
+# Sync select settings from host (statusLine, syntax highlighting, thinking mode)
 if [[ -f "$HOME/.claude/settings.json" ]] && command -v jq &>/dev/null; then
   HOST_SETTINGS="$HOME/.claude/settings.json"
   AGENT_SETTINGS="$AGENT_STATE/settings.json"
