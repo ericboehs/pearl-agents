@@ -6,19 +6,27 @@ set -euo pipefail
 BIN_DIR="$(dirname "$0")"
 
 usage() {
-  echo "Usage: pearl <agent-name> [claude-args...]"
+  echo "Usage: pearl <agent-name> [--auth <profile>] [claude-args...]"
   echo "       pearl setup [agent-name]"
+  echo "       pearl auth [add|<profile-name>]"
   echo ""
   echo "Run a PEARL agent in a Docker container."
   echo ""
   echo "Commands:"
   echo "  setup             List agents and their config status"
   echo "  setup <agent>     Configure an agent interactively"
+  echo "  auth              List auth profiles and show active"
+  echo "  auth <name>       Switch active auth profile"
+  echo "  auth add          Create a new auth profile interactively"
+  echo ""
+  echo "Options:"
+  echo "  --auth <profile>  Override auth profile for this run"
   echo ""
   echo "Examples:"
   echo "  pearl code \"Implement the FizzBuzz function\""
   echo "  pearl code --resume abc123"
   echo "  pearl code -p \"Fix the failing test\""
+  echo "  pearl code --auth proxy \"Use a different auth\""
   echo ""
   echo "Environment:"
   echo "  PEARL_ROOT          Config root (default: ~/.config/pearl)"
@@ -34,6 +42,10 @@ case "$1" in
     shift
     exec "$BIN_DIR/pearl-setup" "$@"
     ;;
+  auth)
+    shift
+    exec "$BIN_DIR/pearl-auth" "$@"
+    ;;
 esac
 
 AGENT="$1"
@@ -45,12 +57,33 @@ if [[ ! "$AGENT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   exit 1
 fi
 
+# Parse --auth flag from remaining args
+AUTH_OVERRIDE=""
+REMAINING_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --auth)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --auth requires a profile name" >&2
+        exit 1
+      fi
+      AUTH_OVERRIDE="$2"
+      shift 2
+      ;;
+    *)
+      REMAINING_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
 PEARL_ROOT="${PEARL_ROOT:-$HOME/.config/pearl}"
 AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$BIN_DIR/.." && pwd)}"
 AGENT_ENV="$PEARL_ROOT/agents/$AGENT.env"
 AGENT_STATE="$PEARL_ROOT/state/$AGENT"
 SKILLS_DIR="$AGENTS_REPO/agents/$AGENT/skills"
 IMAGE="pearl-$AGENT:latest"
+AUTH_DIR="$PEARL_ROOT/auth"
 
 # Validate agent directory exists
 if [[ ! -d "$AGENTS_REPO/agents/$AGENT" ]]; then
@@ -66,13 +99,53 @@ if [[ ! -d "$AGENTS_REPO/agents/$AGENT" ]]; then
   exit 1
 fi
 
-# Run setup if env file doesn't exist
+# Run setup if agent env file doesn't exist
 if [[ ! -f "$AGENT_ENV" ]]; then
+  # If no auth profiles exist either, run auth add first
+  if ! compgen -G "$AUTH_DIR/*.env" > /dev/null 2>&1; then
+    echo "No auth profiles found. Let's create one first..."
+    "$BIN_DIR/pearl-auth" add
+    # Re-check after auth add (user may have aborted)
+    if ! compgen -G "$AUTH_DIR/*.env" > /dev/null 2>&1; then
+      exit 1
+    fi
+  fi
   echo "Agent '$AGENT' is not configured yet. Starting setup..."
   "$BIN_DIR/pearl-setup" "$AGENT"
   # Re-check after setup (user may have aborted)
   if [[ ! -f "$AGENT_ENV" ]]; then
     exit 1
+  fi
+fi
+
+# Resolve auth profile: --auth flag > auth/active file > error
+AUTH_ENV=""
+if [[ -n "$AUTH_OVERRIDE" ]]; then
+  AUTH_ENV="$AUTH_DIR/$AUTH_OVERRIDE.env"
+  if [[ ! -f "$AUTH_ENV" ]]; then
+    echo "Error: Auth profile '$AUTH_OVERRIDE' not found." >&2
+    echo "  Run 'pearl auth' to list available profiles." >&2
+    exit 1
+  fi
+elif [[ -f "$AUTH_DIR/active" ]]; then
+  ACTIVE_PROFILE=$(tr -d '[:space:]' < "$AUTH_DIR/active")
+  if [[ -n "$ACTIVE_PROFILE" ]]; then
+    AUTH_ENV="$AUTH_DIR/$ACTIVE_PROFILE.env"
+    if [[ ! -f "$AUTH_ENV" ]]; then
+      echo "Error: Active auth profile '$ACTIVE_PROFILE' not found." >&2
+      echo "  Run 'pearl auth' to fix your configuration." >&2
+      exit 1
+    fi
+  fi
+fi
+
+# Backwards compat warning: detect auth vars in agent env
+if [[ -n "$AUTH_ENV" ]]; then
+  if grep -qE "^(KEYCHAIN_AUTH|ANTHROPIC_BASE_URL|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN)=" "$AGENT_ENV" 2>/dev/null; then
+    echo "Warning: Agent env '$AGENT_ENV' contains auth variables." >&2
+    echo "  These are now managed by auth profiles. The auth profile will take precedence." >&2
+    echo "  Consider removing auth variables from the agent env and using 'pearl auth' instead." >&2
+    echo "" >&2
   fi
 fi
 
@@ -82,6 +155,24 @@ mkdir -p "$AGENT_STATE"
 # Seed .claude.json from host if not yet initialized
 if [[ ! -f "$AGENT_STATE/.claude.json" && -f "$HOME/.claude.json" ]]; then
   cp "$HOME/.claude.json" "$AGENT_STATE/.claude.json"
+fi
+
+# Sync select settings from host (theme, statusLine, syntax highlighting)
+if [[ -f "$HOME/.claude/settings.json" ]] && command -v jq &>/dev/null; then
+  HOST_SETTINGS="$HOME/.claude/settings.json"
+  AGENT_SETTINGS="$AGENT_STATE/settings.json"
+  # Rewrite localhost:4141 → host.docker.internal:4141 in statusLine for Docker
+  PICKED=$(jq '{statusLine, syntaxHighlightingDisabled, alwaysThinkingEnabled}
+    | if .statusLine.command then .statusLine.command |= gsub("localhost:4141"; "host.docker.internal:4141") else . end' \
+    "$HOST_SETTINGS" 2>/dev/null) && {
+    if [[ -f "$AGENT_SETTINGS" ]]; then
+      # Merge picked keys into existing agent settings
+      jq -s '.[0] * .[1]' "$AGENT_SETTINGS" <(echo "$PICKED") > "$AGENT_SETTINGS.tmp" && \
+        mv "$AGENT_SETTINGS.tmp" "$AGENT_SETTINGS" || rm -f "$AGENT_SETTINGS.tmp"
+    else
+      echo "$PICKED" > "$AGENT_SETTINGS"
+    fi
+  }
 fi
 
 # Ensure installMethod is npm (container uses npm, not native)
@@ -99,7 +190,16 @@ if [[ -f "$AGENT_STATE/.claude.json" ]]; then
 fi
 
 # Keychain auth: extract credentials from macOS Keychain
-if grep -q "KEYCHAIN_AUTH=true" "$AGENT_ENV" 2>/dev/null; then
+# When an auth profile is active, only check the auth profile (not agent env).
+# Fall back to agent env only when no auth profile exists (backwards compat).
+KEYCHAIN_SOURCE=""
+if [[ -n "$AUTH_ENV" ]]; then
+  grep -q "KEYCHAIN_AUTH=true" "$AUTH_ENV" 2>/dev/null && KEYCHAIN_SOURCE="$AUTH_ENV"
+elif grep -q "KEYCHAIN_AUTH=true" "$AGENT_ENV" 2>/dev/null; then
+  KEYCHAIN_SOURCE="$AGENT_ENV"
+fi
+
+if [[ -n "$KEYCHAIN_SOURCE" ]]; then
   CREDS=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null) || {
     echo "Error: No Claude credentials found in macOS Keychain."
     echo "  Run 'claude login' on your host first, then try again."
@@ -108,9 +208,14 @@ if grep -q "KEYCHAIN_AUTH=true" "$AGENT_ENV" 2>/dev/null; then
   }
   echo "$CREDS" > "$AGENT_STATE/.credentials.json"
   chmod 600 "$AGENT_STATE/.credentials.json"
+else
+  # Remove stale credentials from previous keychain runs
+  rm -f "$AGENT_STATE/.credentials.json"
 fi
 
+# Build docker args — agent env first, auth env second (auth wins on duplicates)
 DOCKER_ARGS=(-it --rm --env-file "$AGENT_ENV")
+[[ -n "$AUTH_ENV" ]] && DOCKER_ARGS+=(--env-file "$AUTH_ENV")
 
 # Mount persistent Claude state
 DOCKER_ARGS+=(-v "$AGENT_STATE:/home/agent/.claude")
@@ -120,11 +225,24 @@ DOCKER_ARGS+=(-v "$AGENT_STATE:/home/agent/.claude")
 # Mount skills (volume-mounted, not baked into image)
 [[ -d "$SKILLS_DIR" ]] && DOCKER_ARGS+=(-v "$SKILLS_DIR:/skills:ro")
 
+# Mount tools (MCP configs, custom scripts)
+TOOLS_DIR="$AGENTS_REPO/agents/$AGENT/tools"
+[[ -d "$TOOLS_DIR" ]] && DOCKER_ARGS+=(-v "$TOOLS_DIR:/tools:ro")
+
+# Mount inbound images (set by EARL's pearl_handler)
+[[ -n "${PEARL_IMAGES:-}" && -d "$PEARL_IMAGES" ]] && \
+  DOCKER_ARGS+=(-v "$PEARL_IMAGES:/pearl-images:ro")
+
+# Mount output directory (set by EARL's pearl_handler)
+[[ -n "${PEARL_OUTPUT:-}" ]] && \
+  DOCKER_ARGS+=(-v "$PEARL_OUTPUT:/pearl-output")
+
 # Mount current directory as workspace
 DOCKER_ARGS+=(-v "$(pwd):/workspace" -w /workspace)
 
-# Copilot proxy needs host.docker.internal
-if grep -q "ANTHROPIC_BASE_URL" "$AGENT_ENV" 2>/dev/null; then
+# Copilot proxy needs host.docker.internal — check both auth and agent env
+if { [[ -n "$AUTH_ENV" ]] && grep -q "ANTHROPIC_BASE_URL" "$AUTH_ENV" 2>/dev/null; } || \
+   grep -q "ANTHROPIC_BASE_URL" "$AGENT_ENV" 2>/dev/null; then
   DOCKER_ARGS+=(--add-host=host.docker.internal:host-gateway)
 fi
 
@@ -139,4 +257,4 @@ if ! docker image inspect "$IMAGE" &>/dev/null; then
 fi
 
 exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" \
-  claude --dangerously-skip-permissions "$@"
+  claude --dangerously-skip-permissions ${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}

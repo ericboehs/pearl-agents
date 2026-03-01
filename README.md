@@ -11,14 +11,17 @@ Each agent runs in an ephemeral Docker container with scoped credentials, volume
 docker build -t pearl-base:latest agents/base/
 docker build -t pearl-code:latest agents/code/
 
-# 2. Run — setup wizard runs automatically on first use
+# 2. Create an auth profile
+bin/pearl auth add
+
+# 3. Run — agent setup wizard runs automatically on first use
 bin/pearl code "What tools do you have? List your versions."
 ```
 
 Or configure explicitly:
 
 ```bash
-# Interactive setup wizard
+# Interactive agent setup wizard
 bin/pearl setup code
 
 # List available agents and their config status
@@ -35,15 +38,20 @@ pearl-agents/
 │       ├── skills/       # Volume-mounted at /skills (no rebuild needed)
 │       │   ├── CLAUDE.md
 │       │   └── references/
-│       └── tools/        # Custom CLI scripts (baked into image)
+│       └── tools/        # MCP configs + custom scripts (volume-mounted)
+│           └── .mcp.json # Playwright MCP config
 ├── bin/
 │   ├── pearl             # Wrapper script (handles auth, mounts, docker run)
-│   ├── pearl-setup       # Interactive setup wizard
+│   ├── pearl-auth        # Auth profile manager (list, switch, add)
+│   ├── pearl-setup       # Interactive agent setup wizard
 │   └── test-agent        # Smoke test for built images
 └── examples/
-    ├── env.apikey.example
-    ├── env.keychain.example
-    └── env.proxy.example
+    ├── auth/
+    │   ├── keychain.env.example
+    │   ├── proxy.env.example
+    │   └── apikey.env.example
+    └── agents/
+        └── code.env.example
 ```
 
 ### Image Layers
@@ -60,30 +68,55 @@ node:22-bookworm-slim
 | Mount | Source | Target | Purpose |
 |-------|--------|--------|---------|
 | Skills | `agents/<name>/skills/` | `/skills` (ro) | CLAUDE.md + reference docs |
+| Tools | `agents/<name>/tools/` | `/tools` (ro) | MCP configs + custom scripts |
 | Workspace | `$(pwd)` | `/workspace` | Code being worked on |
 | State | `~/.config/pearl/state/<name>/` | `/home/agent/.claude` | Persistent Claude config |
 
-## Auth Models
+## Auth Profiles
 
-PEARL supports three authentication models, configured via `pearl setup <agent>` or manually via env files:
+Auth is managed globally via profiles in `~/.config/pearl/auth/`. Any agent can use any profile, avoiding duplication of proxy/keychain/API key config across agent env files.
 
-### Direct API Key
-Set `ANTHROPIC_API_KEY` in the env file. Simplest setup.
+### Managing Profiles
+
 ```bash
-cp examples/env.apikey.example ~/.config/pearl/agents/code.env
+# List profiles and show which is active
+pearl auth
+
+# Create a new profile interactively
+pearl auth add
+
+# Switch the active profile
+pearl auth proxy
+
+# Override for a single run
+pearl code --auth keychain "hello"
 ```
 
-### macOS Keychain
-Set `KEYCHAIN_AUTH=true` in the env file. The wrapper extracts credentials from macOS Keychain at launch (same as `claude login` on host).
+### Auth Methods
+
+PEARL supports three authentication methods, configured via `pearl auth add`:
+
+#### macOS Keychain
+Uses your existing `claude login` credentials. The wrapper extracts them from macOS Keychain at launch.
 ```bash
-cp examples/env.keychain.example ~/.config/pearl/agents/code.env
+cp examples/auth/keychain.env.example ~/.config/pearl/auth/keychain.env
 ```
 
-### Copilot Proxy
-Set `ANTHROPIC_BASE_URL` to your local proxy. The wrapper adds `--add-host=host.docker.internal:host-gateway` automatically.
+#### Copilot Proxy
+Routes through a local proxy. The wrapper adds `--add-host=host.docker.internal:host-gateway` automatically.
 ```bash
-cp examples/env.proxy.example ~/.config/pearl/agents/code.env
+cp examples/auth/proxy.env.example ~/.config/pearl/auth/proxy.env
 ```
+
+#### Direct API Key
+Set `ANTHROPIC_API_KEY` directly. Simplest setup.
+```bash
+cp examples/auth/apikey.env.example ~/.config/pearl/auth/apikey.env
+```
+
+### Backwards Compatibility
+
+Existing monolithic agent env files (with auth + git + token in one file) still work. Auth profiles take precedence via Docker env-file ordering, and a migration warning is printed to stderr.
 
 ## Adding a New Agent
 
@@ -119,11 +152,15 @@ docker run -it --rm pearl-code:latest bash
 
 ```
 ~/.config/pearl/
+├── auth/
+│   ├── active              # Plain text: name of active profile
+│   ├── keychain.env        # KEYCHAIN_AUTH=true
+│   └── proxy.env           # ANTHROPIC_BASE_URL, model vars, etc.
 ├── agents/
-│   ├── code.env          # Secrets for code agent
-│   └── pptx.env          # (future)
+│   ├── code.env            # Git identity + GITHUB_TOKEN only
+│   └── pptx.env            # (future)
 └── state/
-    └── code/             # Persistent Claude state
+    └── code/               # Persistent Claude state
         ├── .claude.json
         └── .credentials.json
 ```

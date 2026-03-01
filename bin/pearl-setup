@@ -4,8 +4,10 @@ set -euo pipefail
 # PEARL agent setup wizard
 # Creates ~/.config/pearl/agents/<agent>.env interactively
 
-AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
+BIN_DIR="$(dirname "$0")"
+AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$BIN_DIR/.." && pwd)}"
 PEARL_ROOT="${PEARL_ROOT:-$HOME/.config/pearl}"
+AUTH_DIR="$PEARL_ROOT/auth"
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -133,6 +135,23 @@ fi
 
 check_docker
 
+# Ensure an auth profile exists before proceeding
+if ! compgen -G "$AUTH_DIR/*.env" > /dev/null 2>&1; then
+  echo ""
+  echo "  No auth profiles found. You need one before setting up an agent."
+  echo ""
+  if confirm "Run 'pearl auth add' now?" "Y"; then
+    "$BIN_DIR/pearl-auth" add
+    if ! compgen -G "$AUTH_DIR/*.env" > /dev/null 2>&1; then
+      echo "  No auth profile created. Aborting."
+      exit 1
+    fi
+  else
+    echo "  Run 'pearl auth add' to create an auth profile first."
+    exit 1
+  fi
+fi
+
 # Check for existing config
 if [[ -f "$AGENT_ENV" ]]; then
   echo ""
@@ -147,71 +166,9 @@ echo "════════════════════════�
 echo "  PEARL Setup — $AGENT agent"
 echo "══════════════════════════════════════════"
 
-# ── Step 1: Auth ─────────────────────────────────────────────────────
+# ── Step 1: Git Identity ────────────────────────────────────────────
 
-heading "Step 1/4: Authentication"
-echo ""
-echo "  How should this agent authenticate with Claude?"
-echo ""
-echo "    1) Keychain (macOS) — uses your existing 'claude login' credentials"
-echo "    2) Copilot proxy    — routes through a local proxy (e.g., clapilot)"
-echo "    3) API key          — direct Anthropic API key"
-echo ""
-prompt "Auth method" "1"
-AUTH_CHOICE="$REPLY"
-
-AUTH_METHOD=""
-PROXY_URL=""
-PROXY_MODEL=""
-PROXY_SONNET=""
-PROXY_HAIKU=""
-API_KEY=""
-
-case "$AUTH_CHOICE" in
-  1|"")
-    AUTH_METHOD="keychain"
-    if security find-generic-password -s "Claude Code-credentials" -a "$USER" -w &>/dev/null; then
-      echo "  ✓ Found Claude credentials in macOS Keychain"
-    else
-      echo ""
-      echo "  ⚠ No Claude credentials found in Keychain."
-      echo "    Run 'claude login' on your host first."
-      if ! confirm "Continue anyway?" "N"; then
-        exit 1
-      fi
-    fi
-    ;;
-  2)
-    AUTH_METHOD="proxy"
-    echo ""
-    prompt "Proxy URL" "http://host.docker.internal:4141"
-    PROXY_URL="$REPLY"
-    prompt "Model" "claude-opus-4.6"
-    PROXY_MODEL="$REPLY"
-    prompt "Sonnet model" "claude-sonnet-4.5"
-    PROXY_SONNET="$REPLY"
-    prompt "Haiku model" "claude-haiku-4.5"
-    PROXY_HAIKU="$REPLY"
-    ;;
-  3)
-    AUTH_METHOD="apikey"
-    echo ""
-    prompt_secret "Anthropic API key"
-    API_KEY="$REPLY"
-    if [[ -z "$API_KEY" ]]; then
-      echo "  ✗ API key is required."
-      exit 1
-    fi
-    ;;
-  *)
-    echo "  Invalid choice: $AUTH_CHOICE"
-    exit 1
-    ;;
-esac
-
-# ── Step 2: Git Identity ────────────────────────────────────────────
-
-heading "Step 2/4: Git Identity"
+heading "Step 1/3: Git Identity"
 echo ""
 echo "  Commits made by this agent will use this identity."
 echo ""
@@ -233,9 +190,9 @@ if [[ -z "$GIT_EMAIL" ]]; then
   exit 1
 fi
 
-# ── Step 3: GitHub Token ────────────────────────────────────────────
+# ── Step 2: GitHub Token ────────────────────────────────────────────
 
-heading "Step 3/4: GitHub Token"
+heading "Step 2/3: GitHub Token"
 echo ""
 echo "  A GitHub PAT lets the agent clone repos and open PRs."
 echo ""
@@ -273,12 +230,19 @@ if [[ -z "$GITHUB_PAT" ]]; then
   GITHUB_PAT="$REPLY"
 fi
 
-# ── Step 4: Docker Image ────────────────────────────────────────────
+# ── Step 3: Docker Image ────────────────────────────────────────────
 
-heading "Step 4/4: Docker Image"
+heading "Step 3/3: Docker Image"
 echo ""
 
 # ── Summary ──────────────────────────────────────────────────────────
+
+# Show active auth profile
+ACTIVE_AUTH="(none)"
+if [[ -f "$AUTH_DIR/active" ]]; then
+  ACTIVE_AUTH=$(tr -d '[:space:]' < "$AUTH_DIR/active")
+  [[ -z "$ACTIVE_AUTH" ]] && ACTIVE_AUTH="(none)"
+fi
 
 echo ""
 echo "══════════════════════════════════════════"
@@ -286,15 +250,8 @@ echo "  Configuration Summary"
 echo "══════════════════════════════════════════"
 echo ""
 
-AUTH_DISPLAY=""
-case "$AUTH_METHOD" in
-  keychain) AUTH_DISPLAY="Keychain (macOS)" ;;
-  proxy)    AUTH_DISPLAY="Copilot proxy ($PROXY_URL)" ;;
-  apikey)   AUTH_DISPLAY="API key" ;;
-esac
-
 printf "  %-14s %s\n" "Agent:" "$AGENT"
-printf "  %-14s %s\n" "Auth:" "$AUTH_DISPLAY"
+printf "  %-14s %s\n" "Auth profile:" "$ACTIVE_AUTH"
 printf "  %-14s %s\n" "Git name:" "$GIT_NAME"
 printf "  %-14s %s\n" "Git email:" "$GIT_EMAIL"
 if [[ -n "$GITHUB_PAT" ]]; then
@@ -316,29 +273,6 @@ fi
 mkdir -p "$(dirname "$AGENT_ENV")" "$AGENT_STATE"
 
 {
-  case "$AUTH_METHOD" in
-    keychain)
-      echo "# Keychain auth — credentials extracted from macOS Keychain at launch"
-      echo "KEYCHAIN_AUTH=true"
-      ;;
-    proxy)
-      echo "# Copilot proxy auth — routes through local proxy"
-      echo "ANTHROPIC_BASE_URL=$PROXY_URL"
-      echo "ANTHROPIC_AUTH_TOKEN=dummy"
-      echo "ANTHROPIC_MODEL=$PROXY_MODEL"
-      echo "ANTHROPIC_DEFAULT_SONNET_MODEL=$PROXY_SONNET"
-      echo "ANTHROPIC_SMALL_FAST_MODEL=$PROXY_HAIKU"
-      echo "ANTHROPIC_DEFAULT_HAIKU_MODEL=$PROXY_HAIKU"
-      echo "DISABLE_NON_ESSENTIAL_MODEL_CALLS=1"
-      echo "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
-      ;;
-    apikey)
-      echo "# Direct API key auth"
-      echo "ANTHROPIC_API_KEY=$API_KEY"
-      ;;
-  esac
-
-  echo ""
   echo "# Git identity for commits"
   echo "GIT_AUTHOR_NAME=$GIT_NAME"
   echo "GIT_AUTHOR_EMAIL=$GIT_EMAIL"

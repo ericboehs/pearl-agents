@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# PEARL auth profile manager
+# Manages auth profiles in ~/.config/pearl/auth/
+
+PEARL_ROOT="${PEARL_ROOT:-$HOME/.config/pearl}"
+AUTH_DIR="$PEARL_ROOT/auth"
+ACTIVE_FILE="$AUTH_DIR/active"
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+prompt() {
+  local label="$1" default="${2:-}"
+  if [[ -n "$default" ]]; then
+    printf "  %s [%s]: " "$label" "$default" >&2
+  else
+    printf "  %s: " "$label" >&2
+  fi
+  read -r REPLY
+  [[ -z "$REPLY" ]] && REPLY="$default" || true
+}
+
+prompt_secret() {
+  local label="$1" default="${2:-}"
+  if [[ -n "$default" ]]; then
+    local masked
+    masked=$(mask_token "$default")
+    printf "  %s [%s]: " "$label" "$masked" >&2
+  else
+    printf "  %s: " "$label" >&2
+  fi
+  read -rs REPLY
+  echo >&2
+  [[ -z "$REPLY" ]] && REPLY="$default" || true
+}
+
+confirm() {
+  local label="$1" default="${2:-Y}"
+  if [[ "$default" == "Y" ]]; then
+    printf "  %s [Y/n]: " "$label" >&2
+  else
+    printf "  %s [y/N]: " "$label" >&2
+  fi
+  read -r REPLY
+  [[ -z "$REPLY" ]] && REPLY="$default" || true
+  [[ "$REPLY" =~ ^[Yy] ]]
+}
+
+mask_token() {
+  local token="$1"
+  if [[ ${#token} -ge 12 ]]; then
+    echo "${token:0:6}...${token: -6}"
+  else
+    echo "...${token: -4}"
+  fi
+}
+
+heading() {
+  echo ""
+  echo "  $1"
+  printf '  %*s\n' "${#1}" '' | tr ' ' '─'
+}
+
+# ── List profiles ────────────────────────────────────────────────────
+
+list_profiles() {
+  local active=""
+  if [[ -f "$ACTIVE_FILE" ]]; then
+    active=$(tr -d '[:space:]' < "$ACTIVE_FILE")
+  fi
+
+  local found=false
+  if compgen -G "$AUTH_DIR/*.env" > /dev/null 2>&1; then
+    echo ""
+    echo "Auth profiles:"
+    echo ""
+    for f in "$AUTH_DIR"/*.env; do
+      local name
+      name=$(basename "$f" .env)
+      if [[ "$name" == "$active" ]]; then
+        printf "  * %-16s %s\n" "$name" "(active)"
+      else
+        printf "    %-16s\n" "$name"
+      fi
+    done
+    found=true
+  fi
+
+  if [[ "$found" == false ]]; then
+    echo ""
+    echo "No auth profiles found."
+    echo ""
+    echo "  Run 'pearl auth add' to create one."
+  fi
+  echo ""
+}
+
+# ── Switch active profile ────────────────────────────────────────────
+
+switch_profile() {
+  local name="$1"
+  local profile="$AUTH_DIR/$name.env"
+
+  if [[ ! -f "$profile" ]]; then
+    echo "Error: Auth profile '$name' not found." >&2
+    echo "" >&2
+    echo "Available profiles:" >&2
+    if compgen -G "$AUTH_DIR/*.env" > /dev/null 2>&1; then
+      for f in "$AUTH_DIR"/*.env; do
+        echo "  $(basename "$f" .env)" >&2
+      done
+    else
+      echo "  (none — run 'pearl auth add' to create one)" >&2
+    fi
+    exit 1
+  fi
+
+  mkdir -p "$AUTH_DIR"
+  echo "$name" > "$ACTIVE_FILE"
+  echo "Switched active auth profile to '$name'."
+}
+
+# ── Add new profile ──────────────────────────────────────────────────
+
+add_profile() {
+  mkdir -p "$AUTH_DIR"
+
+  echo ""
+  echo "══════════════════════════════════════════"
+  echo "  PEARL Auth — New Profile"
+  echo "══════════════════════════════════════════"
+
+  heading "Authentication Method"
+  echo ""
+  echo "  How should this profile authenticate with Claude?"
+  echo ""
+  echo "    1) Keychain (macOS) — uses your existing 'claude login' credentials"
+  echo "    2) Proxy            — routes through a local proxy (e.g., copilot-api)"
+  echo "    3) API key          — direct Anthropic API key"
+  echo ""
+  prompt "Auth method" "1"
+  local auth_choice="$REPLY"
+
+  local auth_method="" proxy_url="" proxy_model="" proxy_sonnet="" proxy_haiku="" proxy_autocompact="" api_key=""
+
+  case "$auth_choice" in
+    1|"")
+      auth_method="keychain"
+      if security find-generic-password -s "Claude Code-credentials" -a "$USER" -w &>/dev/null; then
+        echo "  ✓ Found Claude credentials in macOS Keychain"
+      else
+        echo ""
+        echo "  ⚠ No Claude credentials found in Keychain."
+        echo "    Run 'claude login' on your host first."
+        if ! confirm "Continue anyway?" "N"; then
+          exit 1
+        fi
+      fi
+      ;;
+    2)
+      auth_method="proxy"
+      echo ""
+      prompt "Proxy URL" "http://host.docker.internal:4141"
+      proxy_url="$REPLY"
+      prompt "Model" "claude-opus-4.6"
+      proxy_model="$REPLY"
+      prompt "Sonnet model" "claude-sonnet-4.5"
+      proxy_sonnet="$REPLY"
+      prompt "Haiku model" "claude-haiku-4.5"
+      proxy_haiku="$REPLY"
+      prompt "Autocompact threshold %" "60"
+      proxy_autocompact="$REPLY"
+      ;;
+    3)
+      auth_method="apikey"
+      echo ""
+      prompt_secret "Anthropic API key"
+      api_key="$REPLY"
+      if [[ -z "$api_key" ]]; then
+        echo "  ✗ API key is required."
+        exit 1
+      fi
+      ;;
+    *)
+      echo "  Invalid choice: $auth_choice"
+      exit 1
+      ;;
+  esac
+
+  heading "Profile Name"
+  echo ""
+  prompt "Name for this profile" "$auth_method"
+  local profile_name="$REPLY"
+
+  if [[ -z "$profile_name" ]]; then
+    echo "  ✗ Profile name is required."
+    exit 1
+  fi
+
+  if [[ ! "$profile_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "  ✗ Invalid name (must be alphanumeric, hyphens, underscores)"
+    exit 1
+  fi
+
+  local profile_file="$AUTH_DIR/$profile_name.env"
+
+  if [[ -f "$profile_file" ]]; then
+    if ! confirm "Profile '$profile_name' exists. Overwrite?" "N"; then
+      exit 0
+    fi
+  fi
+
+  # Write profile
+  {
+    case "$auth_method" in
+      keychain)
+        echo "# Keychain auth — credentials extracted from macOS Keychain at launch"
+        echo "KEYCHAIN_AUTH=true"
+        ;;
+      proxy)
+        echo "# Copilot proxy auth — routes through local proxy"
+        echo "ANTHROPIC_BASE_URL=$proxy_url"
+        echo "ANTHROPIC_AUTH_TOKEN=dummy"
+        echo "ANTHROPIC_MODEL=$proxy_model"
+        echo "ANTHROPIC_DEFAULT_SONNET_MODEL=$proxy_sonnet"
+        echo "ANTHROPIC_SMALL_FAST_MODEL=$proxy_haiku"
+        echo "ANTHROPIC_DEFAULT_HAIKU_MODEL=$proxy_haiku"
+        echo ""
+        echo "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=$proxy_autocompact"
+        echo "DISABLE_NON_ESSENTIAL_MODEL_CALLS=1"
+        echo "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
+        ;;
+      apikey)
+        echo "# Direct API key auth"
+        echo "ANTHROPIC_API_KEY=$api_key"
+        ;;
+    esac
+  } > "$profile_file"
+
+  chmod 600 "$profile_file"
+  echo ""
+  echo "  ✓ Created $profile_file"
+
+  # Set as active if it's the first profile or user confirms
+  local is_first=true
+  for f in "$AUTH_DIR"/*.env; do
+    [[ "$(basename "$f")" == "$(basename "$profile_file")" ]] && continue
+    is_first=false
+    break
+  done
+
+  if [[ "$is_first" == true ]]; then
+    echo "$profile_name" > "$ACTIVE_FILE"
+    echo "  ✓ Set as active profile (first profile)"
+  elif confirm "Set as active profile?" "Y"; then
+    echo "$profile_name" > "$ACTIVE_FILE"
+    echo "  ✓ Set as active profile"
+  fi
+
+  echo ""
+}
+
+# ── Main ─────────────────────────────────────────────────────────────
+
+case "${1:-}" in
+  ""|list)
+    list_profiles
+    ;;
+  add)
+    add_profile
+    ;;
+  *)
+    switch_profile "$1"
+    ;;
+esac
