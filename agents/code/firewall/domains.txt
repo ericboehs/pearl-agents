@@ -1,0 +1,6 @@
+# Language package registries
+rubygems.org
+pypi.org
+files.pythonhosted.org
+proxy.golang.org
+sum.golang.org
