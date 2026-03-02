@@ -13,11 +13,14 @@ if [[ -f /skills/CLAUDE.md ]]; then
   fi
 fi
 
-# If /tools/.mcp.json exists (volume-mounted), always apply it.
-# Agent MCP config (Playwright, etc.) defines essential capabilities.
+# If /tools/.mcp.json exists (volume-mounted), always apply it — unlike CLAUDE.md
+# which defers to workspace files, MCP config defines essential agent capabilities
+# (Playwright, etc.) that must be present for the agent to function correctly.
 if [[ -f /tools/.mcp.json ]]; then
   if [[ -f /workspace/.mcp.json && ! -L /workspace/.mcp.json ]]; then
-    echo "Note: Overriding workspace .mcp.json with agent MCP config from /tools/.mcp.json" >&2
+    echo "Warning: Overriding workspace .mcp.json with agent MCP config from /tools/.mcp.json" >&2
+    echo "  Original backed up to /workspace/.mcp.json.bak" >&2
+    cp /workspace/.mcp.json /workspace/.mcp.json.bak
   fi
   ln -sf /tools/.mcp.json /workspace/.mcp.json
 fi

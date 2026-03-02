@@ -16,7 +16,7 @@ You are an autonomous code agent running inside a Docker container. You write, t
 - **Shell** (`bash`, `shellcheck`)
 - **Git** (`git`, `gh` if configured)
 - **Search** (`rg`, `jq`, `curl`)
-- **Browser** (`playwright` — headless Chromium via MCP for screenshots, navigation, form filling)
+- **Browser** (headless Chromium via `@playwright/mcp` — available as MCP tools for screenshots, navigation, form filling)
 
 ## Coding Conventions
 
@@ -38,11 +38,11 @@ You are an autonomous code agent running inside a Docker container. You write, t
 
 ## Inbound Images
 
-If images were passed to you with this session, they are available at `/pearl-images/`. Check this directory first when asked to analyze, describe, or process an image. Read the image files directly using the Read tool.
+If images were passed to you with this session, they are available at `/pearl-images/` (mounted by the pearl runner). Check this directory first when asked to analyze, describe, or process an image. Read the image files directly using the Read tool.
 
 ## Output Files
 
-Save any output files (screenshots, images, artifacts) to `/pearl-output/`. Files placed here are automatically uploaded to the chat.
+Save any output files (screenshots, images, artifacts) to `/pearl-output/` (mounted by the pearl runner). Files placed here are automatically uploaded to the chat.
 
 ## Safety Rules
 

@@ -84,7 +84,7 @@ fi
 # Step 5: Verify entrypoint symlinks skills
 echo "5. Checking entrypoint skill symlink..."
 if [[ -d "$SKILLS_DIR" ]]; then
-  SYMLINK_CHECK=$(docker run --rm -v "$SKILLS_DIR:/skills:ro" "$IMAGE" \
+  if ! SYMLINK_CHECK=$(docker run --rm -v "$SKILLS_DIR:/skills:ro" "$IMAGE" \
     bash -c '
       if [[ -L /workspace/CLAUDE.md ]]; then
         target=$(readlink /workspace/CLAUDE.md)
@@ -92,15 +92,18 @@ if [[ -d "$SKILLS_DIR" ]]; then
           echo "OK: /workspace/CLAUDE.md -> $target"
         else
           echo "FAIL: Symlink points to $target instead of /skills/CLAUDE.md"
+          exit 1
         fi
       else
         echo "FAIL: /workspace/CLAUDE.md is not a symlink"
         ls -la /workspace/CLAUDE.md 2>&1 || echo "(file does not exist)"
+        exit 1
       fi
-    ')
-  echo "   $SYMLINK_CHECK"
-  if [[ "$SYMLINK_CHECK" == *"FAIL"* ]]; then
+    '); then
+    echo "   $SYMLINK_CHECK"
     FAILURES=$((FAILURES + 1))
+  else
+    echo "   $SYMLINK_CHECK"
   fi
 else
   echo "   SKIP: No skills directory at $SKILLS_DIR"
@@ -110,7 +113,7 @@ fi
 TOOLS_DIR="$AGENTS_REPO/agents/$AGENT/tools"
 echo "6. Checking entrypoint MCP config symlink..."
 if [[ -f "$TOOLS_DIR/.mcp.json" ]]; then
-  MCP_CHECK=$(docker run --rm -v "$TOOLS_DIR:/tools:ro" "$IMAGE" \
+  if ! MCP_CHECK=$(docker run --rm -v "$TOOLS_DIR:/tools:ro" "$IMAGE" \
     bash -c '
       if [[ -L /workspace/.mcp.json ]]; then
         target=$(readlink /workspace/.mcp.json)
@@ -118,15 +121,18 @@ if [[ -f "$TOOLS_DIR/.mcp.json" ]]; then
           echo "OK: /workspace/.mcp.json -> $target"
         else
           echo "FAIL: Symlink points to $target instead of /tools/.mcp.json"
+          exit 1
         fi
       else
         echo "FAIL: /workspace/.mcp.json is not a symlink"
         ls -la /workspace/.mcp.json 2>&1 || echo "(file does not exist)"
+        exit 1
       fi
-    ')
-  echo "   $MCP_CHECK"
-  if [[ "$MCP_CHECK" == *"FAIL"* ]]; then
+    '); then
+    echo "   $MCP_CHECK"
     FAILURES=$((FAILURES + 1))
+  else
+    echo "   $MCP_CHECK"
   fi
 else
   echo "   SKIP: No .mcp.json at $TOOLS_DIR"

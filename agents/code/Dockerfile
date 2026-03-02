@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 RUN npm install -g @playwright/mcp \
   && /usr/local/lib/node_modules/@playwright/mcp/node_modules/.bin/playwright install --with-deps chromium \
-  && chmod -R o+rwx $PLAYWRIGHT_BROWSERS_PATH \
+  && chown -R agent:agent $PLAYWRIGHT_BROWSERS_PATH \
   && rm -rf /var/lib/apt/lists/*
 
 USER agent
