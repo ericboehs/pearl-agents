@@ -76,6 +76,24 @@ jobs:
               fi
             '
 
+      - name: Verify firewall packages installed
+        run: |
+          docker run --rm pearl-base:latest bash -c \
+            'command -v iptables && command -v ipset && command -v dig'
+
+      - name: Verify firewall script exists and is executable
+        run: |
+          docker run --rm pearl-base:latest bash -c \
+            'test -x /usr/local/bin/init-firewall.sh && echo "init-firewall.sh OK"'
+
+      - name: Smoke test firewall initialization
+        run: |
+          docker run --rm \
+            --cap-add=NET_ADMIN --cap-add=NET_RAW \
+            -v "$GITHUB_WORKSPACE/agents/code/firewall:/firewall:ro" \
+            pearl-code:latest \
+            bash -c 'sudo /usr/local/bin/init-firewall.sh && echo "Firewall smoke test passed"'
+
       - name: Clean up Docker images
         if: always()
         run: |

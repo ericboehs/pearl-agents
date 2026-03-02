@@ -22,6 +22,15 @@ if [[ -f /tools/.mcp.json ]]; then
   ln -sf /tools/.mcp.json /workspace/.mcp.json
 fi
 
+# Initialize firewall if enabled for this agent
+if [[ -f /firewall/enabled ]]; then
+  echo "Initializing network firewall..." >&2
+  if ! sudo /usr/local/bin/init-firewall.sh; then
+    echo "Error: Firewall initialization failed. Refusing to start without network security." >&2
+    exit 1
+  fi
+fi
+
 if [[ $# -eq 0 ]]; then
   echo "Error: No command provided. Usage: docker run pearl-<agent> claude [args...]" >&2
   exit 1

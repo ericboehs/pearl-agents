@@ -132,6 +132,35 @@ else
   echo "   SKIP: No .mcp.json at $TOOLS_DIR"
 fi
 
+# Step 7: Verify firewall (if enabled for this agent)
+FIREWALL_DIR="$AGENTS_REPO/agents/$AGENT/firewall"
+echo "7. Checking firewall..."
+if [[ -f "$FIREWALL_DIR/enabled" ]]; then
+  FIREWALL_CHECK=$(docker run --rm \
+    --cap-add=NET_ADMIN --cap-add=NET_RAW \
+    -v "$FIREWALL_DIR:/firewall:ro" \
+    "$IMAGE" bash -c '
+      sudo /usr/local/bin/init-firewall.sh 2>&1
+      # Verify blocked domain
+      if curl -sf --max-time 5 https://example.com >/dev/null 2>&1; then
+        echo "FAIL: example.com should be blocked"
+        exit 1
+      fi
+      # Verify allowed domain
+      if ! curl -sf --max-time 5 https://api.github.com/zen >/dev/null 2>&1; then
+        echo "FAIL: api.github.com should be allowed"
+        exit 1
+      fi
+      echo "OK: Firewall blocking and allowing correctly"
+    ' 2>&1)
+  echo "   $FIREWALL_CHECK"
+  if [[ "$FIREWALL_CHECK" == *"FAIL"* ]]; then
+    FAILURES=$((FAILURES + 1))
+  fi
+else
+  echo "   SKIP: No firewall/enabled for $AGENT"
+fi
+
 echo ""
 if [[ $FAILURES -gt 0 ]]; then
   echo "=== $FAILURES check(s) FAILED ==="
