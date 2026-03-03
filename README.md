@@ -4,6 +4,8 @@
 
 Each agent runs in an ephemeral Docker container with scoped credentials, volume-mounted skills, and no host access beyond what's explicitly configured.
 
+> **Coming from the official Claude Code devcontainer?** See [how Pearl compares](docs/comparison-devcontainers.md).
+
 ## Quick Start
 
 ```bash
