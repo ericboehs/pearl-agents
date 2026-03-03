@@ -27,12 +27,16 @@ if [[ -f /tools/.mcp.json ]]; then
   ln -sf /tools/.mcp.json /workspace/.mcp.json
 fi
 
-# Initialize firewall if enabled for this agent
-if [[ -f /firewall/enabled ]]; then
-  echo "Initializing network firewall..." >&2
-  if ! sudo /usr/local/bin/init-firewall.sh; then
-    echo "Error: Firewall initialization failed. Refusing to start without network security." >&2
-    exit 1
+# Initialize firewall (enabled by default, opt out with /firewall/disabled)
+if [[ ! -f /firewall/disabled ]]; then
+  if sudo iptables -L -n >/dev/null 2>&1; then
+    echo "Initializing network firewall..." >&2
+    if ! sudo /usr/local/bin/init-firewall.sh; then
+      echo "Error: Firewall initialization failed. Refusing to start without network security." >&2
+      exit 1
+    fi
+  else
+    echo "Warning: iptables not available (missing NET_ADMIN?) — starting WITHOUT network firewall" >&2
   fi
 fi
 

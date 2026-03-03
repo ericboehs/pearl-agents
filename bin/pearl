@@ -245,11 +245,11 @@ TOOLS_DIR="$AGENTS_REPO/agents/$AGENT/tools"
 [[ -n "${PEARL_OUTPUT:-}" ]] && \
   DOCKER_ARGS+=(-v "$PEARL_OUTPUT:/pearl-output")
 
-# Firewall support
+# Firewall support (enabled by default, opt out with firewall/disabled)
 FIREWALL_DIR="$AGENTS_REPO/agents/$AGENT/firewall"
-if [[ -f "$FIREWALL_DIR/enabled" ]]; then
+if [[ ! -f "$FIREWALL_DIR/disabled" ]]; then
   DOCKER_ARGS+=(--cap-add=NET_ADMIN --cap-add=NET_RAW)
-  DOCKER_ARGS+=(-v "$FIREWALL_DIR:/firewall:ro")
+  [[ -d "$FIREWALL_DIR" ]] && DOCKER_ARGS+=(-v "$FIREWALL_DIR:/firewall:ro")
 fi
 
 # Mount current directory as workspace

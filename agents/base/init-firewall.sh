@@ -117,8 +117,6 @@ for domain in "${ALL_DOMAINS[@]}"; do
 done
 
 # ── Host network access ────────────────────────────────────────────
-# Only allow host access when a local proxy is configured via ANTHROPIC_BASE_URL.
-# We allow only the specific port to prevent access to other host services.
 HOST_IP=$(ip route show default | awk '/^default via/ {print $3; exit}')
 if [[ -z "$HOST_IP" ]]; then
   log "ERROR: Failed to detect host IP from 'ip route show default'"
@@ -129,23 +127,33 @@ if [[ ! "$HOST_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
   exit 1
 fi
 
-PROXY_URL="${ANTHROPIC_BASE_URL:-}"
-if [[ -n "$PROXY_URL" ]]; then
-  # Extract host and port from URL (e.g. http://localhost:4141 or http://host.docker.internal:4141)
-  PROXY_HOST=$(echo "$PROXY_URL" | sed -E 's|https?://([^:/]+).*|\1|')
-  PROXY_PORT=$(echo "$PROXY_URL" | sed -E 's|.*:([0-9]+).*|\1|')
+# Unrestricted host access (opt-in via marker file)
+if [[ -f /firewall/allow-host-access ]]; then
+  iptables -A INPUT -s "$HOST_IP" -m state --state ESTABLISHED,RELATED -j ACCEPT
+  iptables -A OUTPUT -d "$HOST_IP" -j ACCEPT
+  log "Unrestricted host access enabled ($HOST_IP)"
+else
+  # Only allow the specific proxy port when ANTHROPIC_BASE_URL points to a local host
+  PROXY_URL="${ANTHROPIC_BASE_URL:-}"
+  if [[ -n "$PROXY_URL" ]]; then
+    # Extract host and port from URL (e.g. http://localhost:4141 or http://host.docker.internal:4141)
+    PROXY_HOST=$(echo "$PROXY_URL" | sed -E 's|https?://([^:/]+).*|\1|')
+    PROXY_PORT=$(echo "$PROXY_URL" | sed -nE 's|https?://[^/]*:([0-9]+).*|\1|p')
 
-  # Only add rule if it points to a local host
-  if [[ "$PROXY_HOST" == "localhost" || "$PROXY_HOST" == "127.0.0.1" || "$PROXY_HOST" == "host.docker.internal" ]]; then
-    if [[ "$PROXY_PORT" =~ ^[0-9]+$ ]]; then
-      iptables -A INPUT -s "$HOST_IP" -p tcp --sport "$PROXY_PORT" -m state --state ESTABLISHED -j ACCEPT
-      iptables -A OUTPUT -d "$HOST_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
-      log "Proxy exception added: $HOST_IP:$PROXY_PORT (ANTHROPIC_BASE_URL=$PROXY_HOST:$PROXY_PORT)"
+    # Only add rule if it points to a local host
+    if [[ "$PROXY_HOST" == "localhost" || "$PROXY_HOST" == "127.0.0.1" || "$PROXY_HOST" == "host.docker.internal" ]]; then
+      if [[ -n "$PROXY_PORT" && "$PROXY_PORT" =~ ^[0-9]+$ ]]; then
+        iptables -A INPUT -s "$HOST_IP" -p tcp --sport "$PROXY_PORT" -m state --state ESTABLISHED -j ACCEPT
+        iptables -A OUTPUT -d "$HOST_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
+        log "Proxy exception added: $HOST_IP:$PROXY_PORT (ANTHROPIC_BASE_URL=$PROXY_HOST:$PROXY_PORT)"
+      else
+        log "ERROR: Could not parse port from ANTHROPIC_BASE_URL='$PROXY_URL' (expected http://host:PORT)"
+        log "ERROR: The local proxy will be blocked by the firewall. Refusing to start."
+        exit 1
+      fi
     else
-      log "WARNING: Could not parse port from ANTHROPIC_BASE_URL='$PROXY_URL' (expected http://host:PORT) — host network access not granted"
+      log "ANTHROPIC_BASE_URL points to remote host ($PROXY_HOST) — no host network exception needed"
     fi
-  else
-    log "ANTHROPIC_BASE_URL points to remote host ($PROXY_HOST) — no host network exception needed"
   fi
 fi
 
@@ -165,11 +173,15 @@ iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
 iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
 
 # ── Block IPv6 entirely ─────────────────────────────────────────────
-ip6tables -P INPUT DROP 2>/dev/null || true
-ip6tables -P FORWARD DROP 2>/dev/null || true
-ip6tables -P OUTPUT DROP 2>/dev/null || true
-ip6tables -A INPUT -i lo -j ACCEPT 2>/dev/null || true
-ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
+if ip6tables -P INPUT DROP 2>/dev/null; then
+  ip6tables -P FORWARD DROP
+  ip6tables -P OUTPUT DROP
+  ip6tables -A INPUT -i lo -j ACCEPT
+  ip6tables -A OUTPUT -o lo -j ACCEPT
+  log "IPv6 blocked (all policies DROP)"
+else
+  log "WARNING: ip6tables not available — IPv6 traffic is NOT blocked"
+fi
 
 # ── Verification ────────────────────────────────────────────────────
 log "Verifying firewall rules..."
