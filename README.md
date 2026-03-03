@@ -173,9 +173,16 @@ pypi.org
 files.pythonhosted.org
 ```
 
-### Proxy Support
+### Host Access
 
-When `ANTHROPIC_BASE_URL` points to a local proxy (e.g. `http://host.docker.internal:4141`), the firewall automatically adds a rule allowing traffic to that host and port.
+By default the firewall blocks all traffic to the Docker host. Two levels of access are available:
+
+- **Proxy only (automatic):** When `ANTHROPIC_BASE_URL` points to a local proxy (e.g. `http://host.docker.internal:4141`), the firewall allows traffic to that specific host and port.
+- **Unrestricted:** To allow the agent to reach any service on the Docker host (local databases, dev servers, MCP servers, etc.), create an `allow-host-access` marker:
+
+```bash
+touch agents/<name>/firewall/allow-host-access
+```
 
 ### Other Details
 
