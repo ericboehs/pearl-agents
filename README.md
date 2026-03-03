@@ -36,7 +36,6 @@ pearl-agents/
 │   ├── base/             # Base image: node + claude-cli + git + dumb-init
 │   └── code/             # Code agent: + ruby, python, go, build-essential
 │       ├── firewall/     # Network firewall config (iptables whitelisting)
-│       │   ├── enabled   # Marker file — presence enables firewall
 │       │   └── domains.txt # Agent-specific allowed domains
 │       ├── skills/       # Volume-mounted at /skills (no rebuild needed)
 │       │   ├── CLAUDE.md
@@ -139,20 +138,18 @@ Skills live in `agents/<name>/skills/` and are mounted read-only at `/skills` in
 
 ## Network Firewall
 
-PEARL includes an optional iptables-based network firewall that whitelists allowed domains and blocks all other outbound traffic. This prevents agents from exfiltrating data or reaching unexpected services.
+PEARL includes an iptables-based network firewall that whitelists allowed domains and blocks all other outbound traffic. The firewall is **enabled by default** for all agents — no configuration needed.
 
-### Enabling the Firewall
+If firewall initialization fails, the container **refuses to start** — it will not fall back to an unprotected state.
 
-Create a marker file to enable the firewall for an agent:
+### Disabling the Firewall
+
+To opt out for a specific agent, create a `disabled` marker file:
 
 ```bash
 mkdir -p agents/<name>/firewall
-touch agents/<name>/firewall/enabled
+touch agents/<name>/firewall/disabled
 ```
-
-When `agents/<name>/firewall/enabled` exists, `bin/pearl` adds `--cap-add=NET_ADMIN --cap-add=NET_RAW` and mounts the firewall directory. The entrypoint runs `init-firewall.sh` before launching Claude.
-
-If firewall initialization fails, the container **refuses to start** — it will not fall back to an unprotected state.
 
 ### Core Domains (Always Allowed)
 

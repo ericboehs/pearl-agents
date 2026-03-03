@@ -27,8 +27,8 @@ if [[ -f /tools/.mcp.json ]]; then
   ln -sf /tools/.mcp.json /workspace/.mcp.json
 fi
 
-# Initialize firewall if enabled for this agent
-if [[ -f /firewall/enabled ]]; then
+# Initialize firewall (enabled by default, opt out with /firewall/disabled)
+if [[ ! -f /firewall/disabled ]]; then
   echo "Initializing network firewall..." >&2
   if ! sudo /usr/local/bin/init-firewall.sh; then
     echo "Error: Firewall initialization failed. Refusing to start without network security." >&2
