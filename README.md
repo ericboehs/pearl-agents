@@ -35,6 +35,9 @@ pearl-agents/
 ├── agents/
 │   ├── base/             # Base image: node + claude-cli + git + dumb-init
 │   └── code/             # Code agent: + ruby, python, go, build-essential
+│       ├── firewall/     # Network firewall config (iptables whitelisting)
+│       │   ├── enabled   # Marker file — presence enables firewall
+│       │   └── domains.txt # Agent-specific allowed domains
 │       ├── skills/       # Volume-mounted at /skills (no rebuild needed)
 │       │   ├── CLAUDE.md
 │       │   └── references/
@@ -58,7 +61,7 @@ pearl-agents/
 
 ```
 node:22-bookworm-slim
-  └── pearl-base          # claude-cli, git, dumb-init, ripgrep, jq
+  └── pearl-base          # claude-cli, git, dumb-init, ripgrep, jq, iptables
         └── pearl-code    # ruby, python, go, build-essential, shellcheck
         └── pearl-pptx    # (future) libreoffice, python-pptx
 ```
@@ -133,6 +136,54 @@ Existing monolithic agent env files (with auth + git + token in one file) still 
 Skills live in `agents/<name>/skills/` and are mounted read-only at `/skills` in the container. The entrypoint symlinks `/skills/CLAUDE.md` into `/workspace/CLAUDE.md` so Claude picks it up automatically.
 
 **Edit skills without rebuilding the image** — changes take effect on the next `bin/pearl` invocation.
+
+## Network Firewall
+
+PEARL includes an optional iptables-based network firewall that whitelists allowed domains and blocks all other outbound traffic. This prevents agents from exfiltrating data or reaching unexpected services.
+
+### Enabling the Firewall
+
+Create a marker file to enable the firewall for an agent:
+
+```bash
+mkdir -p agents/<name>/firewall
+touch agents/<name>/firewall/enabled
+```
+
+When `agents/<name>/firewall/enabled` exists, `bin/pearl` adds `--cap-add=NET_ADMIN --cap-add=NET_RAW` and mounts the firewall directory. The entrypoint runs `init-firewall.sh` before launching Claude.
+
+If firewall initialization fails, the container **refuses to start** — it will not fall back to an unprotected state.
+
+### Core Domains (Always Allowed)
+
+Every agent with the firewall enabled can reach:
+
+- `registry.npmjs.org` — npm packages
+- `api.anthropic.com` — Claude API
+- `sentry.io` — error reporting
+- `statsig.anthropic.com` / `statsig.com` — feature flags
+- GitHub (`*.github.com`) — IPs fetched dynamically from the [GitHub meta API](https://api.github.com/meta)
+
+DNS (UDP/TCP port 53) and SSH (port 22) are always permitted. Localhost traffic is unrestricted.
+
+### Per-Agent Domains
+
+Add agent-specific domains to `agents/<name>/firewall/domains.txt` (one domain per line, `#` comments supported):
+
+```
+# Example: allow PyPI for pip installs
+pypi.org
+files.pythonhosted.org
+```
+
+### Proxy Support
+
+When `ANTHROPIC_BASE_URL` points to a local proxy (e.g. `http://host.docker.internal:4141`), the firewall automatically adds a rule allowing traffic to that host and port.
+
+### Other Details
+
+- **IPv6** is blocked entirely (all policies set to DROP).
+- **Verification**: on startup the firewall self-tests by confirming `example.com` is blocked and `api.github.com` is reachable. If either check fails, the container exits.
 
 ## Development
 
