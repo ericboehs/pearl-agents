@@ -83,11 +83,28 @@ show_pat_instructions() {
 # Check Docker connectivity upfront
 check_docker() {
   if ! docker info &>/dev/null; then
-    echo "Error: Cannot connect to Docker daemon." >&2
-    echo "  Ensure Docker is running:" >&2
-    echo "    macOS: open -a Docker" >&2
-    echo "    Linux: sudo systemctl start docker" >&2
-    exit 1
+    if [[ -d "/Applications/Docker.app" ]]; then
+      echo "Docker not running. Starting Docker Desktop..." >&2
+      open -a Docker
+      printf "  Waiting for Docker to be ready..." >&2
+      for _ in $(seq 1 60); do
+        docker info &>/dev/null && break
+        printf "." >&2
+        sleep 1
+      done
+      echo "" >&2
+      if ! docker info &>/dev/null; then
+        echo "Error: Docker Desktop failed to start within 60 seconds." >&2
+        echo "  Try opening Docker Desktop manually." >&2
+        exit 1
+      fi
+    else
+      echo "Error: Cannot connect to Docker daemon." >&2
+      echo "  Ensure Docker is running:" >&2
+      echo "    macOS:  brew install --cask docker && open -a Docker" >&2
+      echo "    Linux:  sudo systemctl start docker" >&2
+      exit 1
+    fi
   fi
 }
 
