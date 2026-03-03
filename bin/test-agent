@@ -7,7 +7,13 @@ set -euo pipefail
 
 AGENT="${1:?Usage: bin/test-agent <agent-name>}"
 IMAGE="pearl-$AGENT:latest"
-AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
+SOURCE="$0"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd -P "$(dirname "$SOURCE")/.." && pwd)}"
 SKILLS_DIR="$AGENTS_REPO/agents/$AGENT/skills"
 FAILURES=0
 

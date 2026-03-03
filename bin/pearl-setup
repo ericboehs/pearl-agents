@@ -4,7 +4,13 @@ set -euo pipefail
 # PEARL agent setup wizard
 # Creates ~/.config/pearl/agents/<agent>.env interactively
 
-BIN_DIR="$(dirname "$0")"
+SOURCE="$0"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+BIN_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$BIN_DIR/.." && pwd)}"
 PEARL_ROOT="${PEARL_ROOT:-$HOME/.config/pearl}"
 AUTH_DIR="$PEARL_ROOT/auth"
@@ -335,34 +341,27 @@ if docker image inspect "$IMAGE" &>/dev/null; then
   echo "  ✓ Image $IMAGE found"
 else
   echo ""
-  echo "  ⚠ Image $IMAGE not found."
-  if confirm "Build it now?" "Y"; then
-    echo ""
-    BASE_IMAGE="pearl-base:latest"
-    if ! docker image inspect "$BASE_IMAGE" &>/dev/null; then
-      echo "  Building $BASE_IMAGE..."
-      if ! docker build -t "$BASE_IMAGE" "$AGENTS_REPO/agents/base/" >&2; then
-        echo "  ✗ Base image build failed. Your configuration has been saved."
-        echo "  Fix the build issue and run:"
-        echo "    docker build -t $BASE_IMAGE $AGENTS_REPO/agents/base/"
-        echo "    docker build -t $IMAGE $AGENT_DIR/"
-        exit 1
-      fi
-    fi
-    echo "  Building $IMAGE..."
-    if ! docker build -t "$IMAGE" "$AGENT_DIR/" >&2; then
-      echo "  ✗ Agent image build failed. Your configuration has been saved."
+  echo "  Building Docker images..."
+  echo ""
+  BASE_IMAGE="pearl-base:latest"
+  if ! docker image inspect "$BASE_IMAGE" &>/dev/null; then
+    echo "  Building $BASE_IMAGE..."
+    if ! docker build -t "$BASE_IMAGE" "$AGENTS_REPO/agents/base/" >&2; then
+      echo "  ✗ Base image build failed. Your configuration has been saved."
       echo "  Fix the build issue and run:"
+      echo "    docker build -t $BASE_IMAGE $AGENTS_REPO/agents/base/"
       echo "    docker build -t $IMAGE $AGENT_DIR/"
       exit 1
     fi
-    echo "  ✓ Images built successfully"
-  else
-    echo ""
-    echo "  Note: Agent image not built. You must build it before running:"
-    echo "    docker build -t pearl-base:latest $AGENTS_REPO/agents/base/"
-    echo "    docker build -t $IMAGE $AGENT_DIR/"
   fi
+  echo "  Building $IMAGE..."
+  if ! docker build -t "$IMAGE" "$AGENT_DIR/" >&2; then
+    echo "  ✗ Agent image build failed. Your configuration has been saved."
+    echo "  Fix the build issue and run:"
+    echo "    docker build -t $IMAGE $AGENT_DIR/"
+    exit 1
+  fi
+  echo "  ✓ Images built successfully"
 fi
 
 echo ""

@@ -3,7 +3,13 @@ set -euo pipefail
 
 # PEARL agent runner — launches Claude Code agents in Docker containers
 
-BIN_DIR="$(dirname "$0")"
+SOURCE="$0"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+BIN_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
 usage() {
   echo "Usage: pearl <agent-name> [--auth <profile>] [claude-args...]"
@@ -264,10 +270,7 @@ fi
 # Verify image exists before launching
 if ! docker image inspect "$IMAGE" &>/dev/null; then
   echo "Error: Docker image '$IMAGE' not found."
-  echo "  Build it with:"
-  echo "    docker build -t pearl-base:latest agents/base/"
-  echo "    docker build -t $IMAGE agents/$AGENT/"
-  echo "  Or run:  pearl setup $AGENT"
+  echo "  Run:  pearl setup $AGENT"
   exit 1
 fi
 

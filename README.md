@@ -6,28 +6,35 @@ Each agent runs in an ephemeral Docker container with scoped credentials, volume
 
 > **Coming from the official Claude Code devcontainer?** See [how Pearl compares](docs/comparison-devcontainers.md).
 
+## Installation
+
+Clone the repo and symlink `pearl` into your PATH:
+
+```bash
+git clone https://github.com/ericboehs/pearl-agents.git
+ln -s "$(pwd)/pearl-agents/bin/pearl" ~/.local/bin/pearl
+```
+
+> **Tip:** Any directory on your `$PATH` works — `~/.local/bin/` is just a common convention. Create it with `mkdir -p ~/.local/bin` if it doesn't exist, and ensure it's in your PATH.
+
 ## Quick Start
 
 ```bash
-# 1. Build images
-docker build -t pearl-base:latest agents/base/
-docker build -t pearl-code:latest agents/code/
+# 1. Create an auth profile
+pearl auth add
 
-# 2. Create an auth profile
-bin/pearl auth add
-
-# 3. Run — agent setup wizard runs automatically on first use
-bin/pearl code "What tools do you have? List your versions."
+# 2. Run — setup wizard and image build happen automatically on first use
+pearl code "What tools do you have? List your versions."
 ```
 
 Or configure explicitly:
 
 ```bash
-# Interactive agent setup wizard
-bin/pearl setup code
+# Interactive agent setup wizard (builds images automatically)
+pearl setup code
 
 # List available agents and their config status
-bin/pearl setup
+pearl setup
 ```
 
 ## Architecture
@@ -195,9 +202,8 @@ touch agents/<name>/firewall/allow-host-access
 ## Development
 
 ```bash
-# Build all images
-docker build -t pearl-base:latest agents/base/
-docker build -t pearl-code:latest agents/code/
+# Build / rebuild all images via setup
+pearl setup code
 
 # Run smoke tests
 bin/test-agent code
