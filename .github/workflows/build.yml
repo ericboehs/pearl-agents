@@ -31,6 +31,9 @@ jobs:
       - name: Verify Go
         run: docker run --rm pearl-code:latest go version
 
+      - name: Verify Playwright
+        run: docker run --rm pearl-code:latest npx --no-install @playwright/mcp --help
+
       - name: Verify entrypoint with skills mount
         run: |
           docker run --rm \
@@ -48,6 +51,27 @@ jobs:
               else
                 echo "FAIL: /workspace/CLAUDE.md is not a symlink"
                 ls -la /workspace/CLAUDE.md 2>&1 || echo "(file does not exist)"
+                exit 1
+              fi
+            '
+
+      - name: Verify MCP config symlink with tools mount
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/agents/code/tools:/tools:ro" \
+            pearl-code:latest \
+            bash -c '
+              if [[ -L /workspace/.mcp.json ]]; then
+                target=$(readlink /workspace/.mcp.json)
+                if [[ "$target" == "/tools/.mcp.json" ]]; then
+                  echo "MCP config symlink OK: /workspace/.mcp.json -> $target"
+                else
+                  echo "FAIL: Symlink points to $target instead of /tools/.mcp.json"
+                  exit 1
+                fi
+              else
+                echo "FAIL: /workspace/.mcp.json is not a symlink"
+                ls -la /workspace/.mcp.json 2>&1 || echo "(file does not exist)"
                 exit 1
               fi
             '
