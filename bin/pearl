@@ -93,28 +93,16 @@ AUTH_DIR="$PEARL_ROOT/auth"
 
 # Check Docker connectivity upfront
 if ! docker info &>/dev/null; then
+  echo "Error: Docker is not running." >&2
   if [[ -d "/Applications/Docker.app" ]]; then
-    echo "Docker not running. Starting Docker Desktop..." >&2
-    open -a Docker
-    printf "  Waiting for Docker to be ready..." >&2
-    for _ in $(seq 1 60); do
-      docker info &>/dev/null && break
-      printf "." >&2
-      sleep 1
-    done
-    echo "" >&2
-    if ! docker info &>/dev/null; then
-      echo "Error: Docker Desktop failed to start within 60 seconds." >&2
-      echo "  Try opening Docker Desktop manually." >&2
-      exit 1
-    fi
+    echo "  Open Docker Desktop and try again:" >&2
+    echo "    open -a Docker" >&2
   else
-    echo "Error: Cannot connect to Docker daemon." >&2
     echo "  Ensure Docker is running:" >&2
     echo "    macOS:  brew install --cask docker && open -a Docker" >&2
     echo "    Linux:  sudo systemctl start docker" >&2
-    exit 1
   fi
+  exit 1
 fi
 
 # Validate agent directory exists
