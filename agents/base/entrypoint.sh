@@ -29,7 +29,7 @@ fi
 
 # Initialize firewall (enabled by default, opt out with /firewall/disabled)
 if [[ ! -f /firewall/disabled ]]; then
-  if sudo iptables -L -n >/dev/null 2>&1; then
+  if sudo /usr/local/bin/init-firewall.sh --check 2>/dev/null; then
     echo "Initializing network firewall..." >&2
     if ! sudo /usr/local/bin/init-firewall.sh; then
       echo "Error: Firewall initialization failed. Refusing to start without network security." >&2

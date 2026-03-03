@@ -157,11 +157,12 @@ touch agents/<name>/firewall/disabled
 
 Every agent with the firewall enabled can reach:
 
+- `raw.githubusercontent.com` / `objects.githubusercontent.com` — GitHub content (resolved via DNS)
 - `registry.npmjs.org` — npm packages
 - `api.anthropic.com` — Claude API
 - `sentry.io` — error reporting
 - `statsig.anthropic.com` / `statsig.com` — feature flags
-- GitHub — IP ranges fetched dynamically from the [GitHub meta API](https://api.github.com/meta)
+- GitHub — IP ranges from the [GitHub meta API](https://api.github.com/meta), excluding the `/22` ranges that overlap with GitHub Pages
 
 DNS (UDP/TCP port 53) and SSH (port 22) are always permitted. Localhost traffic is unrestricted.
 

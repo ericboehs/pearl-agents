@@ -8,6 +8,12 @@ IFS=$'\n\t'
 
 log() { echo "[firewall] $*" >&2; }
 
+# Quick capability check — entrypoint uses this to test if iptables is available
+if [[ "${1:-}" == "--check" ]]; then
+  iptables -L -n >/dev/null 2>&1
+  exit $?
+fi
+
 # ── Preserve Docker DNS before flushing ─────────────────────────────
 DOCKER_DNS_RULES=$(iptables-save -t nat | grep "127\.0\.0\.11" || true)
 
@@ -51,13 +57,17 @@ iptables -A OUTPUT -o lo -j ACCEPT
 ipset create allowed-domains hash:net
 
 # ── GitHub IPs (dynamic via API) ────────────────────────────────────
+# Two /22 ranges (185.199.108.0/22, 192.30.252.0/22) are excluded because they
+# also cover GitHub Pages IPs — any Pages-hosted site would pass the firewall.
+# Domains in those ranges (raw.githubusercontent.com, etc.) are resolved via
+# DNS below instead.
 log "Fetching GitHub IP ranges..."
 gh_ranges=$(curl -sf https://api.github.com/meta) || {
   log "ERROR: Failed to fetch GitHub IP ranges"
   exit 1
 }
 
-if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null; then
+if ! echo "$gh_ranges" | jq -e '.api and .git' >/dev/null; then
   log "ERROR: GitHub API response missing required fields"
   exit 1
 fi
@@ -69,11 +79,19 @@ while read -r cidr; do
     exit 1
   fi
   ipset add allowed-domains "$cidr"
-done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
+done < <(echo "$gh_ranges" | jq -r '
+  [(.api + .git)[] | select(test("^[0-9.]+/"))] | unique
+  | map(select(. != "185.199.108.0/22" and . != "192.30.252.0/22"))
+  | .[]' | aggregate -q)
 
 # ── Core whitelist (all agents) ─────────────────────────────────────
 CORE_DOMAINS=(
+  # GitHub domains whose IPs fall in the excluded /22 ranges (see above)
+  "raw.githubusercontent.com"
+  "objects.githubusercontent.com"
+  # npm
   "registry.npmjs.org"
+  # Claude / Anthropic
   "api.anthropic.com"
   "sentry.io"
   "statsig.anthropic.com"
@@ -129,9 +147,17 @@ fi
 
 # Unrestricted host access (opt-in via marker file)
 if [[ -f /firewall/allow-host-access ]]; then
+  # Allow both the container gateway and host.docker.internal (may differ on Docker Desktop)
   iptables -A INPUT -s "$HOST_IP" -m state --state ESTABLISHED,RELATED -j ACCEPT
   iptables -A OUTPUT -d "$HOST_IP" -j ACCEPT
-  log "Unrestricted host access enabled ($HOST_IP)"
+  HDI_IP=$(getent ahosts host.docker.internal 2>/dev/null | awk '$2 == "STREAM" {print $1; exit}')
+  if [[ -n "$HDI_IP" && "$HDI_IP" != "$HOST_IP" ]]; then
+    iptables -A INPUT -s "$HDI_IP" -m state --state ESTABLISHED,RELATED -j ACCEPT
+    iptables -A OUTPUT -d "$HDI_IP" -j ACCEPT
+    log "Unrestricted host access enabled ($HOST_IP + $HDI_IP)"
+  else
+    log "Unrestricted host access enabled ($HOST_IP)"
+  fi
 else
   # Only allow the specific proxy port when ANTHROPIC_BASE_URL points to a local host
   PROXY_URL="${ANTHROPIC_BASE_URL:-}"
@@ -143,9 +169,14 @@ else
     # Only add rule if it points to a local host
     if [[ "$PROXY_HOST" == "localhost" || "$PROXY_HOST" == "127.0.0.1" || "$PROXY_HOST" == "host.docker.internal" ]]; then
       if [[ -n "$PROXY_PORT" && "$PROXY_PORT" =~ ^[0-9]+$ ]]; then
-        iptables -A INPUT -s "$HOST_IP" -p tcp --sport "$PROXY_PORT" -m state --state ESTABLISHED -j ACCEPT
-        iptables -A OUTPUT -d "$HOST_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
-        log "Proxy exception added: $HOST_IP:$PROXY_PORT (ANTHROPIC_BASE_URL=$PROXY_HOST:$PROXY_PORT)"
+        # Resolve the proxy hostname to its actual IP — on Docker Desktop for Mac,
+        # host.docker.internal (192.168.65.x) differs from the container gateway
+        # (172.17.0.1), so we can't use HOST_IP from the default route.
+        PROXY_IP=$(getent ahosts "$PROXY_HOST" 2>/dev/null | awk '$2 == "STREAM" {print $1; exit}')
+        [[ -z "$PROXY_IP" ]] && PROXY_IP="$HOST_IP"
+        iptables -A INPUT -s "$PROXY_IP" -p tcp --sport "$PROXY_PORT" -m state --state ESTABLISHED -j ACCEPT
+        iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
+        log "Proxy exception added: $PROXY_IP:$PROXY_PORT (ANTHROPIC_BASE_URL=$PROXY_HOST:$PROXY_PORT)"
       else
         log "ERROR: Could not parse port from ANTHROPIC_BASE_URL='$PROXY_URL' (expected http://host:PORT)"
         log "ERROR: The local proxy will be blocked by the firewall. Refusing to start."
