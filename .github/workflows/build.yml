@@ -89,10 +89,11 @@ jobs:
       - name: Smoke test firewall initialization
         run: |
           docker run --rm \
+            --entrypoint bash \
             --cap-add=NET_ADMIN --cap-add=NET_RAW \
             -v "$GITHUB_WORKSPACE/agents/code/firewall:/firewall:ro" \
             pearl-code:latest \
-            bash -c 'sudo /usr/local/bin/init-firewall.sh && echo "Firewall smoke test passed"'
+            -c 'sudo /usr/local/bin/init-firewall.sh && echo "Firewall smoke test passed"'
 
       - name: Clean up Docker images
         if: always()

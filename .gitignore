@@ -8,6 +8,9 @@
 # Runtime state
 state/
 
+# Firewall opt-in flag (managed by pearl-setup, should not be tracked per-user)
+agents/*/firewall/enabled
+
 # OS
 .DS_Store
 

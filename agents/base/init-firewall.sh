@@ -35,9 +35,11 @@ else
 fi
 
 # ── Baseline rules (before restrictions) ────────────────────────────
-# DNS
+# DNS — UDP is stateless so an explicit INPUT rule is required; TCP is needed for large responses
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A INPUT -p udp --sport 53 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+iptables -A INPUT -p tcp --sport 53 -m state --state ESTABLISHED -j ACCEPT
 # SSH
 iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
 iptables -A INPUT -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
@@ -82,9 +84,10 @@ CORE_DOMAINS=(
 AGENT_DOMAINS=()
 if [[ -f /firewall/domains.txt ]]; then
   while IFS= read -r line; do
-    # Skip comments and blank lines
+    # Strip inline comments (everything after #) and trim surrounding whitespace
     line="${line%%#*}"
-    line="${line// /}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
     [[ -z "$line" ]] && continue
     AGENT_DOMAINS+=("$line")
   done < /firewall/domains.txt
@@ -107,16 +110,22 @@ for domain in "${ALL_DOMAINS[@]}"; do
       log "ERROR: Invalid IP from DNS for $domain: $ip"
       exit 1
     fi
-    ipset add allowed-domains "$ip" 2>/dev/null || true
+    if ! out=$(ipset add allowed-domains "$ip" 2>&1); then
+      [[ "$out" == *"already added"* ]] || { log "ERROR: Failed to add $ip to ipset: $out"; exit 1; }
+    fi
   done <<< "$ips"
 done
 
 # ── Host network access ────────────────────────────────────────────
 # Only allow host access when a local proxy is configured via ANTHROPIC_BASE_URL.
 # We allow only the specific port to prevent access to other host services.
-HOST_IP=$(ip route | grep default | cut -d" " -f3)
-if [ -z "$HOST_IP" ]; then
-  log "ERROR: Failed to detect host IP"
+HOST_IP=$(ip route show default | awk '/^default via/ {print $3; exit}')
+if [[ -z "$HOST_IP" ]]; then
+  log "ERROR: Failed to detect host IP from 'ip route show default'"
+  exit 1
+fi
+if [[ ! "$HOST_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+  log "ERROR: Unexpected value for host IP: '$HOST_IP' (expected an IP address)"
   exit 1
 fi
 
@@ -133,7 +142,7 @@ if [[ -n "$PROXY_URL" ]]; then
       iptables -A OUTPUT -d "$HOST_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
       log "Proxy exception added: $HOST_IP:$PROXY_PORT (ANTHROPIC_BASE_URL=$PROXY_HOST:$PROXY_PORT)"
     else
-      log "WARNING: Could not parse port from ANTHROPIC_BASE_URL — host network access not granted"
+      log "WARNING: Could not parse port from ANTHROPIC_BASE_URL='$PROXY_URL' (expected http://host:PORT) — host network access not granted"
     fi
   else
     log "ANTHROPIC_BASE_URL points to remote host ($PROXY_HOST) — no host network exception needed"
@@ -177,4 +186,5 @@ if ! curl --connect-timeout 5 -sf https://api.github.com/zen >/dev/null 2>&1; th
 fi
 log "Allowed domain (api.github.com) correctly accessible"
 
-log "Firewall active — $(ipset list allowed-domains | grep -c 'Members:' || true) rule set(s), IPv4 + IPv6 locked down"
+ENTRY_COUNT=$(ipset list allowed-domains | grep -cE '^[0-9]' || echo 0)
+log "Firewall active — $ENTRY_COUNT IP(s) whitelisted, IPv4 + IPv6 locked down"

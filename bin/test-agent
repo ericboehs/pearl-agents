@@ -144,7 +144,7 @@ echo "7. Checking firewall..."
 if [[ -f "$FIREWALL_DIR/enabled" ]]; then
   # The entrypoint runs init-firewall.sh automatically when /firewall/enabled is mounted.
   # Just verify blocking/allowing behavior — no need to re-run the script.
-  FIREWALL_CHECK=$(docker run --rm \
+  if ! FIREWALL_CHECK=$(docker run --rm \
     --cap-add=NET_ADMIN --cap-add=NET_RAW \
     -v "$FIREWALL_DIR:/firewall:ro" \
     "$IMAGE" bash -c '
@@ -159,10 +159,11 @@ if [[ -f "$FIREWALL_DIR/enabled" ]]; then
         exit 1
       fi
       echo "OK: Firewall blocking and allowing correctly"
-    ' 2>&1)
-  echo "   $FIREWALL_CHECK"
-  if [[ "$FIREWALL_CHECK" == *"FAIL"* ]]; then
+    ' 2>&1); then
+    echo "   $FIREWALL_CHECK"
     FAILURES=$((FAILURES + 1))
+  else
+    echo "   $FIREWALL_CHECK"
   fi
 else
   echo "   SKIP: No firewall/enabled for $AGENT"
