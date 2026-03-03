@@ -29,8 +29,8 @@ fi
 
 # Initialize firewall (enabled by default, opt out with /firewall/disabled)
 if [[ ! -f /firewall/disabled ]]; then
-  check_output=$(sudo /usr/local/bin/init-firewall.sh --check 2>&1)
-  check_exit=$?
+  check_exit=0
+  check_output=$(sudo /usr/local/bin/init-firewall.sh --check 2>&1) || check_exit=$?
   if [[ $check_exit -eq 0 ]]; then
     echo "Initializing network firewall..." >&2
     if ! sudo /usr/local/bin/init-firewall.sh; then

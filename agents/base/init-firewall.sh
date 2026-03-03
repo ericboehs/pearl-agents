@@ -11,7 +11,8 @@ log() { echo "[firewall] $*" >&2; }
 # Quick capability check — routed through this script so only
 # init-firewall.sh needs to be in the sudoers allowlist.
 if [[ "${1:-}" == "--check" ]]; then
-  iptables -L -n >/dev/null 2>&1
+  # stdout suppressed; stderr preserved so the caller can inspect error messages
+  iptables -L -n >/dev/null
   exit $?
 fi
 
