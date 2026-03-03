@@ -92,8 +92,10 @@ IMAGE="pearl-$AGENT:latest"
 AUTH_DIR="$PEARL_ROOT/auth"
 
 # Check Docker connectivity upfront
-if ! docker info &>/dev/null; then
+if ! DOCKER_ERR=$(docker info 2>&1 >/dev/null); then
   echo "Error: Docker is not running." >&2
+  echo "  $DOCKER_ERR" >&2
+  echo "" >&2
   if [[ -d "/Applications/Docker.app" ]]; then
     echo "  Open Docker Desktop and try again:" >&2
     echo "    open -a Docker" >&2
@@ -134,6 +136,7 @@ if [[ ! -f "$AGENT_ENV" ]]; then
   "$BIN_DIR/pearl-setup" "$AGENT"
   # Re-check after setup (user may have aborted)
   if [[ ! -f "$AGENT_ENV" ]]; then
+    echo "Error: Agent '$AGENT' is not configured. Run 'pearl setup $AGENT' to try again." >&2
     exit 1
   fi
 fi

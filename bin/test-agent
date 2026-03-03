@@ -23,9 +23,8 @@ echo ""
 # Step 1: Check image exists
 echo "1. Checking image $IMAGE..."
 if ! docker image inspect "$IMAGE" &>/dev/null; then
-  echo "   FAIL: Image $IMAGE not found. Build it first:"
-  echo "   docker build -t pearl-base:latest agents/base/"
-  echo "   docker build -t pearl-$AGENT:latest agents/$AGENT/"
+  echo "   FAIL: Image $IMAGE not found."
+  echo "   Run:  pearl setup $AGENT"
   exit 1
 fi
 echo "   OK"

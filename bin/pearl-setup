@@ -82,8 +82,10 @@ show_pat_instructions() {
 
 # Check Docker connectivity upfront
 check_docker() {
-  if ! docker info &>/dev/null; then
+  if ! DOCKER_ERR=$(docker info 2>&1 >/dev/null); then
     echo "Error: Docker is not running." >&2
+    echo "  $DOCKER_ERR" >&2
+    echo "" >&2
     if [[ -d "/Applications/Docker.app" ]]; then
       echo "  Open Docker Desktop and try again:" >&2
       echo "    open -a Docker" >&2
@@ -179,7 +181,7 @@ echo "════════════════════════�
 
 # ── Step 1: Git Identity ────────────────────────────────────────────
 
-heading "Step 1/4: Git Identity"
+heading "Step 1/3: Git Identity"
 echo ""
 echo "  Commits made by this agent will use this identity."
 echo ""
@@ -203,7 +205,7 @@ fi
 
 # ── Step 2: GitHub Token ────────────────────────────────────────────
 
-heading "Step 2/4: GitHub Token"
+heading "Step 2/3: GitHub Token"
 echo ""
 echo "  A GitHub PAT lets the agent clone repos and open PRs."
 echo ""
@@ -247,7 +249,7 @@ FIREWALL_DIR="$AGENT_DIR/firewall"
 FIREWALL_ENABLED="no"
 
 if [[ -d "$FIREWALL_DIR" ]]; then
-  heading "Step 3/4: Network Firewall"
+  heading "Step 3/3: Network Firewall"
   echo ""
   echo "  This agent supports network firewall (iptables domain whitelisting)."
   echo "  When enabled, the agent can only reach whitelisted domains."
@@ -270,17 +272,12 @@ if [[ -d "$FIREWALL_DIR" ]]; then
     FIREWALL_ENABLED="no"
   fi
 else
-  heading "Step 3/4: Network Firewall"
+  heading "Step 3/3: Network Firewall"
   echo ""
   echo "  No firewall config found for this agent."
   echo "  To add one, create: agents/$AGENT/firewall/domains.txt"
   FIREWALL_ENABLED="n/a"
 fi
-
-# ── Step 4: Docker Image ────────────────────────────────────────────
-
-heading "Step 4/4: Docker Image"
-echo ""
 
 # ── Summary ──────────────────────────────────────────────────────────
 

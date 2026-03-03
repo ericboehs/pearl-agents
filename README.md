@@ -135,7 +135,7 @@ Existing monolithic agent env files (with auth + git + token in one file) still 
 2. Add any agent-specific tools
 3. Create `agents/<name>/skills/CLAUDE.md` with agent identity and instructions
 4. Add `agents/<name>/skills/references/` for reference docs
-5. Build: `docker build -t pearl-<name>:latest agents/<name>/`
+5. Build: `pearl setup <name>`
 6. Run: `pearl <name>` (setup wizard will run automatically)
 7. Test: `bin/test-agent <name>`
 
