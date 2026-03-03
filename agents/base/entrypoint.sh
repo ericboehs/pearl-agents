@@ -29,14 +29,20 @@ fi
 
 # Initialize firewall (enabled by default, opt out with /firewall/disabled)
 if [[ ! -f /firewall/disabled ]]; then
-  if sudo iptables -L -n >/dev/null 2>&1; then
+  check_output=$(sudo /usr/local/bin/init-firewall.sh --check 2>&1)
+  check_exit=$?
+  if [[ $check_exit -eq 0 ]]; then
     echo "Initializing network firewall..." >&2
     if ! sudo /usr/local/bin/init-firewall.sh; then
       echo "Error: Firewall initialization failed. Refusing to start without network security." >&2
       exit 1
     fi
+  elif echo "$check_output" | grep -qi "iptables\|permission denied\|Operation not permitted"; then
+    echo "Warning: iptables not available (missing NET_ADMIN capability) — starting WITHOUT network firewall" >&2
   else
-    echo "Warning: iptables not available (missing NET_ADMIN?) — starting WITHOUT network firewall" >&2
+    echo "Error: Firewall capability check failed unexpectedly (exit $check_exit): $check_output" >&2
+    echo "Error: Refusing to start without confirming firewall capability." >&2
+    exit 1
   fi
 fi
 
