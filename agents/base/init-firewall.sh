@@ -12,6 +12,10 @@ log() { echo "[firewall] $*" >&2; }
 DOCKER_DNS_RULES=$(iptables-save -t nat | grep "127\.0\.0\.11" || true)
 
 # Flush existing rules and delete existing ipsets
+# Reset policies to ACCEPT first so flushing rules doesn't leave us with DROP+no-rules
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
 iptables -F
 iptables -X
 iptables -t nat -F
@@ -108,17 +112,33 @@ for domain in "${ALL_DOMAINS[@]}"; do
 done
 
 # ── Host network access ────────────────────────────────────────────
+# Only allow host access when a local proxy is configured via ANTHROPIC_BASE_URL.
+# We allow only the specific port to prevent access to other host services.
 HOST_IP=$(ip route | grep default | cut -d" " -f3)
 if [ -z "$HOST_IP" ]; then
   log "ERROR: Failed to detect host IP"
   exit 1
 fi
 
-HOST_NETWORK=$(echo "$HOST_IP" | sed "s/\.[0-9]*$/.0\/24/")
-log "Host network: $HOST_NETWORK"
+PROXY_URL="${ANTHROPIC_BASE_URL:-}"
+if [[ -n "$PROXY_URL" ]]; then
+  # Extract host and port from URL (e.g. http://localhost:4141 or http://host.docker.internal:4141)
+  PROXY_HOST=$(echo "$PROXY_URL" | sed -E 's|https?://([^:/]+).*|\1|')
+  PROXY_PORT=$(echo "$PROXY_URL" | sed -E 's|.*:([0-9]+).*|\1|')
 
-iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
-iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
+  # Only add rule if it points to a local host
+  if [[ "$PROXY_HOST" == "localhost" || "$PROXY_HOST" == "127.0.0.1" || "$PROXY_HOST" == "host.docker.internal" ]]; then
+    if [[ "$PROXY_PORT" =~ ^[0-9]+$ ]]; then
+      iptables -A INPUT -s "$HOST_IP" -p tcp --sport "$PROXY_PORT" -m state --state ESTABLISHED -j ACCEPT
+      iptables -A OUTPUT -d "$HOST_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
+      log "Proxy exception added: $HOST_IP:$PROXY_PORT (ANTHROPIC_BASE_URL=$PROXY_HOST:$PROXY_PORT)"
+    else
+      log "WARNING: Could not parse port from ANTHROPIC_BASE_URL — host network access not granted"
+    fi
+  else
+    log "ANTHROPIC_BASE_URL points to remote host ($PROXY_HOST) — no host network exception needed"
+  fi
+fi
 
 # ── Set default policies to DROP ────────────────────────────────────
 iptables -P INPUT DROP
