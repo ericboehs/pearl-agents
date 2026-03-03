@@ -8,10 +8,19 @@ IFS=$'\n\t'
 
 log() { echo "[firewall] $*" >&2; }
 
-# Quick capability check — entrypoint uses this to test if iptables is available
+# Quick capability check — routed through this script so only
+# init-firewall.sh needs to be in the sudoers allowlist.
 if [[ "${1:-}" == "--check" ]]; then
   iptables -L -n >/dev/null 2>&1
   exit $?
+fi
+
+# Prevent re-invocation — an agent could re-run this script with a crafted
+# ANTHROPIC_BASE_URL to open extra host ports.
+LOCK_FILE="/var/run/firewall-initialized"
+if [[ -f "$LOCK_FILE" ]]; then
+  log "ERROR: Firewall already initialized. Re-initialization is not permitted."
+  exit 1
 fi
 
 # ── Preserve Docker DNS before flushing ─────────────────────────────
@@ -67,31 +76,44 @@ gh_ranges=$(curl -sf https://api.github.com/meta) || {
   exit 1
 }
 
-if ! echo "$gh_ranges" | jq -e '.api and .git' >/dev/null; then
-  log "ERROR: GitHub API response missing required fields"
+if ! echo "$gh_ranges" | jq -e '(.web | type == "array" and length > 0) and (.api | type == "array" and length > 0) and (.git | type == "array" and length > 0)' >/dev/null; then
+  log "ERROR: GitHub API response missing or malformed .web/.api/.git fields"
   exit 1
 fi
 
 log "Processing GitHub IPs..."
+github_cidrs=$(echo "$gh_ranges" | jq -r '
+  [(.web + .api + .git)[] | select(test("^[0-9.]+/"))] | unique
+  | map(select(. != "185.199.108.0/22" and . != "192.30.252.0/22"))
+  | .[]') || {
+  log "ERROR: Failed to extract CIDR ranges from GitHub API response"
+  exit 1
+}
+github_cidrs=$(echo "$github_cidrs" | aggregate -q) || {
+  log "ERROR: aggregate failed to process GitHub CIDR ranges"
+  exit 1
+}
+if [[ -z "$github_cidrs" ]]; then
+  log "ERROR: No IPv4 CIDR ranges found in GitHub API response after filtering"
+  exit 1
+fi
 while read -r cidr; do
   if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
     log "ERROR: Invalid CIDR range from GitHub meta: $cidr"
     exit 1
   fi
   ipset add allowed-domains "$cidr"
-done < <(echo "$gh_ranges" | jq -r '
-  [(.api + .git)[] | select(test("^[0-9.]+/"))] | unique
-  | map(select(. != "185.199.108.0/22" and . != "192.30.252.0/22"))
-  | .[]' | aggregate -q)
+done <<< "$github_cidrs"
 
 # ── Core whitelist (all agents) ─────────────────────────────────────
 CORE_DOMAINS=(
-  # GitHub domains whose IPs fall in the excluded /22 ranges (see above)
+  # GitHub content domains — their IPs currently fall in the excluded /22
+  # ranges, so they must be resolved individually via DNS
   "raw.githubusercontent.com"
   "objects.githubusercontent.com"
   # npm
   "registry.npmjs.org"
-  # Claude / Anthropic
+  # Claude CLI dependencies
   "api.anthropic.com"
   "sentry.io"
   "statsig.anthropic.com"
@@ -150,12 +172,13 @@ if [[ -f /firewall/allow-host-access ]]; then
   # Allow both the container gateway and host.docker.internal (may differ on Docker Desktop)
   iptables -A INPUT -s "$HOST_IP" -m state --state ESTABLISHED,RELATED -j ACCEPT
   iptables -A OUTPUT -d "$HOST_IP" -j ACCEPT
-  HDI_IP=$(getent ahosts host.docker.internal 2>/dev/null | awk '$2 == "STREAM" {print $1; exit}')
-  if [[ -n "$HDI_IP" && "$HDI_IP" != "$HOST_IP" ]]; then
+  HDI_IP=$(getent ahostsv4 host.docker.internal 2>/dev/null | awk '$2 == "STREAM" {print $1; exit}')
+  if [[ -n "$HDI_IP" && "$HDI_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ && "$HDI_IP" != "$HOST_IP" ]]; then
     iptables -A INPUT -s "$HDI_IP" -m state --state ESTABLISHED,RELATED -j ACCEPT
     iptables -A OUTPUT -d "$HDI_IP" -j ACCEPT
     log "Unrestricted host access enabled ($HOST_IP + $HDI_IP)"
   else
+    [[ -z "$HDI_IP" ]] && log "WARNING: host.docker.internal could not be resolved — only gateway IP whitelisted"
     log "Unrestricted host access enabled ($HOST_IP)"
   fi
 else
@@ -172,8 +195,15 @@ else
         # Resolve the proxy hostname to its actual IP — on Docker Desktop for Mac,
         # host.docker.internal (192.168.65.x) differs from the container gateway
         # (172.17.0.1), so we can't use HOST_IP from the default route.
-        PROXY_IP=$(getent ahosts "$PROXY_HOST" 2>/dev/null | awk '$2 == "STREAM" {print $1; exit}')
-        [[ -z "$PROXY_IP" ]] && PROXY_IP="$HOST_IP"
+        PROXY_IP=$(getent ahostsv4 "$PROXY_HOST" 2>/dev/null | awk '$2 == "STREAM" {print $1; exit}')
+        if [[ -z "$PROXY_IP" ]]; then
+          log "WARNING: Could not resolve $PROXY_HOST via getent, falling back to gateway $HOST_IP"
+          PROXY_IP="$HOST_IP"
+        fi
+        if [[ ! "$PROXY_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+          log "ERROR: Resolved proxy IP '$PROXY_IP' is not a valid IPv4 address"
+          exit 1
+        fi
         iptables -A INPUT -s "$PROXY_IP" -p tcp --sport "$PROXY_PORT" -m state --state ESTABLISHED -j ACCEPT
         iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
         log "Proxy exception added: $PROXY_IP:$PROXY_PORT (ANTHROPIC_BASE_URL=$PROXY_HOST:$PROXY_PORT)"
@@ -231,3 +261,6 @@ log "Allowed domain (api.github.com) correctly accessible"
 
 ENTRY_COUNT=$(ipset list allowed-domains | grep -cE '^[0-9]' || echo 0)
 log "Firewall active — $ENTRY_COUNT IP(s) whitelisted, IPv4 + IPv6 locked down"
+
+# Mark initialization complete to prevent re-invocation
+touch "$LOCK_FILE"
