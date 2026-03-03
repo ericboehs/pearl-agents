@@ -2,6 +2,7 @@ FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   dumb-init git curl jq ripgrep \
+  iptables ipset iproute2 dnsutils aggregate sudo \
   && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code
@@ -14,6 +15,10 @@ RUN git config --system credential.https://github.com.helper \
   && git config --system safe.directory /home/agent
 
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=755 init-firewall.sh /usr/local/bin/init-firewall.sh
+
+RUN echo "agent ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/firewall \
+  && chmod 440 /etc/sudoers.d/firewall
 
 RUN useradd -m -s /bin/bash agent
 
