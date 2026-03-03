@@ -17,7 +17,7 @@ RUN git config --system credential.https://github.com.helper \
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chmod=755 init-firewall.sh /usr/local/bin/init-firewall.sh
 
-RUN echo "agent ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/firewall \
+RUN echo "agent ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh, /usr/sbin/iptables" > /etc/sudoers.d/firewall \
   && chmod 440 /etc/sudoers.d/firewall
 
 RUN useradd -m -s /bin/bash agent

@@ -161,7 +161,7 @@ Every agent with the firewall enabled can reach:
 - `api.anthropic.com` — Claude API
 - `sentry.io` — error reporting
 - `statsig.anthropic.com` / `statsig.com` — feature flags
-- GitHub (`*.github.com`) — IPs fetched dynamically from the [GitHub meta API](https://api.github.com/meta)
+- GitHub — IP ranges fetched dynamically from the [GitHub meta API](https://api.github.com/meta)
 
 DNS (UDP/TCP port 53) and SSH (port 22) are always permitted. Localhost traffic is unrestricted.
 

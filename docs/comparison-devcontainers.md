@@ -16,7 +16,7 @@ Both Pearl and the [official Claude Code devcontainer](https://github.com/anthro
 | Configuration | `.devcontainer/devcontainer.json` | `agents/<name>/` + `~/.config/pearl/` |
 | IDE integration | VS Code required | None (CLI-native) |
 | Base image | `node:20` | `node:22-bookworm-slim` |
-| Shell | zsh + Powerlevel10k | bash (minimal) |
+| Shell | zsh (with p10k theme) | bash (minimal) |
 | User | `node` | `agent` |
 
 ## Security Model
@@ -28,7 +28,7 @@ Both Pearl and the [official Claude Code devcontainer](https://github.com/anthro
 | Per-agent domain whitelist | No (single domain list) | Yes (`agents/<name>/firewall/domains.txt`) |
 | Host network access | Entire `/24` subnet open | Blocked by default; proxy-port-only or opt-in via `allow-host-access` |
 | IPv6 | Not blocked | Blocked (all policies DROP) |
-| Permission mode | `--dangerously-skip-permissions` (user choice) | `--dangerously-skip-permissions` |
+| Permission mode | `--dangerously-skip-permissions` (user choice) | `--dangerously-skip-permissions` (always on) |
 | Credential isolation | VS Code manages | Auth profiles (`pearl auth`) |
 | GitHub token | Environment variable | Environment variable via agent env file |
 
