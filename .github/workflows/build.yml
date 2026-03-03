@@ -32,7 +32,7 @@ jobs:
         run: docker run --rm pearl-code:latest go version
 
       - name: Verify Playwright
-        run: docker run --rm pearl-code:latest npx playwright --version
+        run: docker run --rm pearl-code:latest npx --no-install playwright --version
 
       - name: Verify entrypoint with skills mount
         run: |

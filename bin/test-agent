@@ -61,7 +61,7 @@ case "$AGENT" in
     check_tool "python3" "python3 --version | head -1"
     # go uses 'go version' not 'go --version'
     check_tool "go" "go version | head -1"
-    check_tool "playwright" "npx playwright --version 2>&1 | head -1"
+    check_tool "playwright" "npx --no-install playwright --version 2>&1 | head -1"
     ;;
   *)
     echo "   (no tool checks defined for $AGENT)"
