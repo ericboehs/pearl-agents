@@ -170,6 +170,35 @@ if [[ -f "$AGENT_ENV" ]]; then
   echo ""
   echo "  Agent '$AGENT' is already configured: $AGENT_ENV"
   if ! confirm "Overwrite?" "N"; then
+    # Config kept — still ensure the Docker image exists
+    if ! docker image inspect "$IMAGE" &>/dev/null; then
+      echo ""
+      echo "  Docker image '$IMAGE' not found. Building..."
+      echo ""
+      BASE_IMAGE="pearl-base:latest"
+      if ! docker image inspect "$BASE_IMAGE" &>/dev/null; then
+        echo "  Building $BASE_IMAGE..."
+        if ! docker build -t "$BASE_IMAGE" "$AGENTS_REPO/agents/base/" >&2; then
+          echo "  ✗ Base image build failed."
+          echo "  Fix the build issue and run:"
+          echo "    docker build -t $BASE_IMAGE $AGENTS_REPO/agents/base/"
+          echo "    docker build -t $IMAGE $AGENT_DIR/"
+          exit 1
+        fi
+      fi
+      echo "  Building $IMAGE..."
+      if ! docker build -t "$IMAGE" "$AGENT_DIR/" >&2; then
+        echo "  ✗ Agent image build failed."
+        echo "  Fix the build issue and run:"
+        echo "    docker build -t $IMAGE $AGENT_DIR/"
+        exit 1
+      fi
+      echo "  ✓ Images built successfully"
+      echo ""
+      echo "  You're ready to go! Try:"
+      echo "    pearl $AGENT \"What tools do you have?\""
+      echo ""
+    fi
     exit 0
   fi
 fi
