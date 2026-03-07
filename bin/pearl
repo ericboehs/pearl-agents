@@ -3,7 +3,13 @@ set -euo pipefail
 
 # PEARL agent runner — launches Claude Code agents in Docker containers
 
-BIN_DIR="$(dirname "$0")"
+SOURCE="$0"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+BIN_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
 usage() {
   echo "Usage: pearl <agent-name> [--auth <profile>] [claude-args...]"
@@ -85,6 +91,22 @@ SKILLS_DIR="$AGENTS_REPO/agents/$AGENT/skills"
 IMAGE="pearl-$AGENT:latest"
 AUTH_DIR="$PEARL_ROOT/auth"
 
+# Check Docker connectivity upfront
+if ! DOCKER_ERR=$(docker info 2>&1 >/dev/null); then
+  echo "Error: Docker is not running." >&2
+  echo "  $DOCKER_ERR" >&2
+  echo "" >&2
+  if [[ -d "/Applications/Docker.app" ]]; then
+    echo "  Open Docker Desktop and try again:" >&2
+    echo "    open -a Docker" >&2
+  else
+    echo "  Ensure Docker is running:" >&2
+    echo "    macOS:  brew install --cask docker && open -a Docker" >&2
+    echo "    Linux:  sudo systemctl start docker" >&2
+  fi
+  exit 1
+fi
+
 # Validate agent directory exists
 if [[ ! -d "$AGENTS_REPO/agents/$AGENT" ]]; then
   echo "Error: Unknown agent '$AGENT'"
@@ -114,6 +136,7 @@ if [[ ! -f "$AGENT_ENV" ]]; then
   "$BIN_DIR/pearl-setup" "$AGENT"
   # Re-check after setup (user may have aborted)
   if [[ ! -f "$AGENT_ENV" ]]; then
+    echo "Error: Agent '$AGENT' is not configured. Run 'pearl setup $AGENT' to try again." >&2
     exit 1
   fi
 fi
@@ -264,10 +287,7 @@ fi
 # Verify image exists before launching
 if ! docker image inspect "$IMAGE" &>/dev/null; then
   echo "Error: Docker image '$IMAGE' not found."
-  echo "  Build it with:"
-  echo "    docker build -t pearl-base:latest agents/base/"
-  echo "    docker build -t $IMAGE agents/$AGENT/"
-  echo "  Or run:  pearl setup $AGENT"
+  echo "  Run:  pearl setup $AGENT"
   exit 1
 fi
 

@@ -7,7 +7,13 @@ set -euo pipefail
 
 AGENT="${1:?Usage: bin/test-agent <agent-name>}"
 IMAGE="pearl-$AGENT:latest"
-AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
+SOURCE="$0"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+AGENTS_REPO="${PEARL_AGENTS_REPO:-$(cd -P "$(dirname "$SOURCE")/.." && pwd)}"
 SKILLS_DIR="$AGENTS_REPO/agents/$AGENT/skills"
 FAILURES=0
 
@@ -17,9 +23,8 @@ echo ""
 # Step 1: Check image exists
 echo "1. Checking image $IMAGE..."
 if ! docker image inspect "$IMAGE" &>/dev/null; then
-  echo "   FAIL: Image $IMAGE not found. Build it first:"
-  echo "   docker build -t pearl-base:latest agents/base/"
-  echo "   docker build -t pearl-$AGENT:latest agents/$AGENT/"
+  echo "   FAIL: Image $IMAGE not found."
+  echo "   Run:  pearl setup $AGENT"
   exit 1
 fi
 echo "   OK"
