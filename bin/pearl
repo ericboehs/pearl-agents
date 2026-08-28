@@ -198,8 +198,10 @@ if [[ -f "$HOME/.claude/settings.json" ]] && command -v jq &>/dev/null; then
     "$HOST_SETTINGS" 2>/dev/null) && {
     if [[ -f "$AGENT_SETTINGS" ]]; then
       # Merge picked keys into existing agent settings
-      jq -s '.[0] * .[1]' "$AGENT_SETTINGS" <(echo "$PICKED") > "$AGENT_SETTINGS.tmp" && \
-        mv "$AGENT_SETTINGS.tmp" "$AGENT_SETTINGS" || rm -f "$AGENT_SETTINGS.tmp"
+      if ! { jq -s '.[0] * .[1]' "$AGENT_SETTINGS" <(echo "$PICKED") > "$AGENT_SETTINGS.tmp" &&
+             mv "$AGENT_SETTINGS.tmp" "$AGENT_SETTINGS"; }; then
+        rm -f "$AGENT_SETTINGS.tmp"
+      fi
     else
       echo "$PICKED" > "$AGENT_SETTINGS"
     fi
@@ -209,11 +211,11 @@ fi
 # Ensure installMethod is npm (container uses npm, not native)
 if [[ -f "$AGENT_STATE/.claude.json" ]]; then
   if command -v jq &>/dev/null; then
-    jq '.installMethod = "npm"' "$AGENT_STATE/.claude.json" > "$AGENT_STATE/.claude.json.tmp" && \
-      mv "$AGENT_STATE/.claude.json.tmp" "$AGENT_STATE/.claude.json" || {
-        echo "Warning: Could not update installMethod in .claude.json" >&2
-        rm -f "$AGENT_STATE/.claude.json.tmp"
-      }
+    if ! { jq '.installMethod = "npm"' "$AGENT_STATE/.claude.json" > "$AGENT_STATE/.claude.json.tmp" &&
+           mv "$AGENT_STATE/.claude.json.tmp" "$AGENT_STATE/.claude.json"; }; then
+      echo "Warning: Could not update installMethod in .claude.json" >&2
+      rm -f "$AGENT_STATE/.claude.json.tmp"
+    fi
   else
     echo "Warning: jq not found. Skipping installMethod fix for .claude.json." >&2
     echo "  Install jq to suppress the Claude npm-to-native warning." >&2
